@@ -1,0 +1,4411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#101114" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<link rel="manifest" href="app.webmanifest?k=__TOKEN__" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<title>Codex 随行</title>
+<link rel="icon" href="icon-192.png" />
+<style>
+  :root {
+    --bg: #101114;
+    --surface: #17181c;
+    --surface-2: #1e2025;
+    --surface-3: #24262c;
+    --line: #2a2c33;
+    --text: #e6e7e9;
+    --dim: #9a9ca3;
+    --faint: #6b6d75;
+    --accent: #69c497;
+    --accent-ink: #0c1512;
+    --warn: #d9a441;
+    --danger: #e8756b;
+    --r-lg: 20px;
+    --r-md: 14px;
+    --r-sm: 10px;
+    --tabh: 60px;
+    --pad: 16px;
+    /* 底部标签栏占掉的高度。键盘弹起来时置 0：那会儿标签栏收起来给输入框让位。 */
+    --tabpad: calc(var(--tabh) + var(--sab, env(safe-area-inset-bottom, 0px)));
+  }
+  html.kb { --tabpad: 0px; }
+  html.kb nav { display: none; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  /* 让它更像手机 App、少点"网页味"：
+     - 双击不再放大（按钮上 touch-action: manipulation）
+     - 除了消息正文和输入框，别处不允许选中文字（长按不会弹出选择柄和放大镜）
+     - 整页禁用双指缩放由 viewport 的 user-scalable=no 负责 */
+  button, .row, nav, .chatbar, .drawer, .grouphead { touch-action: manipulation; }
+  html, body { overscroll-behavior: none; }
+  body { -webkit-user-select: none; user-select: none; }
+  .bubble, .bubble *, textarea, input, .ap-detail, pre, code {
+    -webkit-user-select: text; user-select: text;
+  }
+  html, body { margin: 0; height: 100%; }
+  /* 安卓键盘弹出时，WebView 会试着把输入框滚进视野，整页跟着往上挪，
+     顶栏就被顶出屏幕了。把文档本身钉死，能滚的只有内部的 .scroll。 */
+  html { position: fixed; inset: 0; overflow: hidden; }
+  body {
+    position: fixed; inset: 0; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { background: none; border: none; padding: 0; cursor: pointer; }
+  .ic { width: 22px; height: 22px; fill: currentColor; flex: 0 0 auto; display: block; }
+  .ic.sm { width: 18px; height: 18px; }
+
+  /* ---------- 页面骨架 ---------- */
+  .page {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    padding-bottom: var(--tabpad);
+    visibility: hidden; opacity: 0;
+  }
+  .page.on { visibility: visible; opacity: 1; }
+  .appbar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+    /* --sat 由安卓壳注入（targetSdk 35 强制 edge-to-edge，WebView 不报 safe-area） */
+    padding: calc(var(--sat, env(safe-area-inset-top, 0px)) + 12px) 10px 10px var(--pad);
+    min-height: 56px;
+  }
+  .appbar h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -.01em; }
+  .appbar .sp { flex: 1 1 auto; }
+  .iconbtn {
+    width: 40px; height: 40px; border-radius: var(--r-sm);
+    display: flex; align-items: center; justify-content: center; color: var(--dim);
+  }
+  .iconbtn:active { background: var(--surface-2); color: var(--text); }
+  .scroll { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: 24px; }
+
+  /* 下拉刷新 */
+  .ptr {
+    height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center;
+    color: var(--dim); font-size: 12.5px; transition: height .18s;
+  }
+  .ptr.on { transition: none; }
+  .ptr .sp { margin-right: 7px; }
+  .ptr.busy .sp { animation: spin 1s linear infinite; }
+
+  /* ---------- 分组列表（Material 惯例，不用铺满卡片） ---------- */
+  .group { margin: 0 var(--pad) 18px; }
+  .grouphead {
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 4px 8px; color: var(--dim); font-size: 12.5px;
+  }
+  .grouphead .n { color: var(--faint); font-variant-numeric: tabular-nums; }
+  .sheetbox { background: var(--surface); border-radius: var(--r-lg); overflow: hidden; }
+  .row {
+    display: flex; align-items: center; gap: 13px; width: 100%;
+    padding: 13px 14px; text-align: left; position: relative;
+  }
+  .row + .row::before {
+    content: ""; position: absolute; left: 49px; right: 0; top: 0;
+    border-top: 1px solid var(--line);
+  }
+  .row:active { background: var(--surface-2); }
+  .row.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .row .lead { color: var(--faint); }
+  .row.on .lead { color: var(--accent); }
+  .row .bd { flex: 1 1 auto; min-width: 0; display: block; }
+  .row .t1, .row .t2 { display: block; }
+  .row .t1 {
+    font-size: 15px; font-weight: 500; letter-spacing: -.005em; line-height: 1.35;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .row .t2 {
+    font-size: 12.5px; color: var(--dim); margin-top: 4px; line-height: 1.4;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .row .tail { color: var(--faint); font-size: 12px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .row.danger .t1 { color: var(--danger); }
+
+  /* 正在生成：列表里那一行的小圈，和对话底部的提示条 */
+  .run-ic { width: 13px; height: 13px; color: var(--accent); animation: spin 1s linear infinite; }
+  .row .tail.run { display: flex; align-items: center; gap: 5px; color: var(--accent); }
+  .genbar { display: flex; align-items: center; gap: 8px; padding: 4px 2px 10px; color: var(--dim); font-size: 12.5px; }
+  .gen-ic { width: 14px; height: 14px; color: var(--accent); animation: spin 1s linear infinite; }
+  /* "正在进行"那条：秒表 + 当前在做什么 + 从左往右扫的高亮 */
+  .genbar { flex-direction: column; align-items: stretch; gap: 6px; }
+  .genbar .gline { display: flex; align-items: center; gap: 8px; }
+  .genbar .gline .gt { color: var(--text); font-variant-numeric: tabular-nums; }
+  .genbar .gact {
+    color: var(--faint); font-size: 12px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; padding-left: 22px;
+  }
+  .sweep { position: relative; height: 3px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+  .sweep i {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 38%; border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    /* 走 transform：以前动的是 left，浏览器每一帧都要重新排版一遍，
+       而这条扫光正好只在"正在生成"时出现，也就是你盯着屏幕看的时候。 */
+    animation: sweep 1.25s ease-in-out infinite;
+    will-change: transform;
+  }
+  @keyframes sweep { 0% { transform: translateX(-105%); } 100% { transform: translateX(265%); } }
+  /* 顶栏上那个小点：滚到上面去了也知道还在跑 */
+  .rundot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+    display: none; margin-right: 2px; animation: pulse 1.4s ease-in-out infinite;
+  }
+  .rundot.on { display: block; }
+
+  /* 导入进度：第一次从电脑同步对话时显示 */
+  .imp { margin: 0 var(--pad) 14px; }
+  .imp .bar { height: 3px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+  .imp .bar i { display: block; height: 100%; width: 34%; border-radius: 2px; background: var(--accent); animation: slide 1.15s ease-in-out infinite; }
+  .imp .txt { margin-top: 9px; font-size: 12.5px; color: var(--dim); display: flex; align-items: center; gap: 7px; }
+  .imp .txt .ic { animation: spin 1s linear infinite; }
+  .imp.done .bar { display: none; }
+  .imp.done .txt .ic { animation: none; color: var(--faint); }
+  @keyframes slide { 0% { transform: translateX(-105%); } 100% { transform: translateX(310%); } }
+
+  /* 我的：顶部那张卡，字号比列表行大一档 */
+  .hero { margin: 0 var(--pad) 18px; padding: 18px 16px; border-radius: var(--r-lg); background: var(--surface); }
+  .hero .name { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .hero .ver { margin-top: 7px; font-size: 13px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .hero .up { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; color: var(--accent); font-size: 14px; font-weight: 500; }
+  .hero .up .sp { flex: 1 1 auto; }
+  .hero .up.none { color: var(--dim); font-weight: 400; }
+
+  /* 开关 */
+  .sw { width: 46px; height: 28px; border-radius: 999px; background: var(--surface-3); position: relative; transition: background .18s; flex: 0 0 auto; }
+  .sw i { position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: #767a83; transition: transform .18s, background .18s; }
+  .sw.on { background: color-mix(in srgb, var(--accent) 36%, transparent); }
+  .sw.on i { transform: translateX(18px); background: var(--accent); }
+
+  /* 第三方推送渠道：一张能看懂的清单，而不是一个下拉框 */
+  .chans { background: var(--surface); border-radius: var(--r-lg); overflow: hidden; margin-bottom: 4px; }
+  .chan { display: flex; align-items: center; gap: 13px; width: 100%; padding: 13px 14px; text-align: left; position: relative; }
+  .chan + .chan::before { content: ""; position: absolute; left: 49px; right: 0; top: 0; border-top: 1px solid var(--line); }
+  .chan:active { background: var(--surface-2); }
+  .chan .lead { color: var(--faint); }
+  .chan.on .lead { color: var(--accent); }
+  .chan .bd { flex: 1 1 auto; min-width: 0; display: block; }
+  .chan .t1, .chan .t2 { display: block; }
+  .chan .t1 { font-size: 15px; font-weight: 500; line-height: 1.35; }
+  .chan .t2 { font-size: 12.5px; color: var(--dim); margin-top: 4px; line-height: 1.4; }
+  .chan .tick { color: var(--accent); opacity: 0; flex: 0 0 auto; }
+  .chan.on .tick { opacity: 1; }
+  .hint { font-size: 12px; color: var(--faint); margin: 7px 2px 0; line-height: 1.55; }
+
+  /* 选项列表：替代系统自带的 select 下拉（那个在黑色界面上很出戏），
+     点一下直接选中，不用再弹一层系统菜单 */
+  .opts { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+  .opt {
+    display: flex; align-items: center; gap: 11px; width: 100%;
+    padding: 12px 13px; text-align: left; position: relative;
+  }
+  .opt + .opt::before {
+    content: ""; position: absolute; left: 13px; right: 0; top: 0;
+    border-top: 1px solid var(--line);
+  }
+  .opt:active { background: var(--surface-3); }
+  .opt .bd { flex: 1 1 auto; min-width: 0; display: block; }
+  .opt .t1 { display: block; font-size: 14.5px; font-weight: 500; line-height: 1.35; }
+  .opt .t2 { display: block; font-size: 12px; color: var(--dim); margin-top: 3px; line-height: 1.4; }
+  .opt .tick { color: var(--accent); opacity: 0; flex: 0 0 auto; }
+  .opt.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .opt.on .t1 { color: var(--accent); font-weight: 600; }
+  .opt.on .tick { opacity: 1; }
+
+  /* ---------- 服务磁贴 ---------- */
+  /* 两列都要能缩：minmax(0,1fr) 而不是 1fr。1fr 的最小宽度是内容宽度，
+     而副标题是一行不换行的（要省略号），内容一长就把这一列撑宽、把另一列
+     挤出屏幕外——手机上就是"只看见一半"。 */
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0 var(--pad) 18px; }
+  .tile {
+    background: var(--surface); border-radius: var(--r-lg); padding: 15px 14px 13px;
+    display: flex; flex-direction: column; gap: 10px; min-height: 116px; text-align: left;
+    min-width: 0;
+  }
+  .tile:active { background: var(--surface-2); transform: scale(.985); }
+  .tile .ti { color: var(--accent); }
+  .tile .tn { font-size: 14px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .td {
+    font-size: 11.5px; color: var(--faint); margin-top: auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tile.add { align-items: center; justify-content: center; color: var(--dim); border: 1px dashed var(--line); background: none; }
+  .tile.add:active { background: var(--surface); }
+
+  /* ---------- 电脑状态（从「服务」里点开） ---------- */
+  #sysmon {
+    position: fixed; inset: 0; z-index: 40; background: var(--bg);
+    display: flex; flex-direction: column;
+    padding-bottom: calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 10px);
+    transform: translateX(100%); visibility: hidden;
+    transition: transform .24s cubic-bezier(.32,.72,0,1);
+  }
+  #sysmon.on { transform: none; visibility: visible; }
+  #sysmon .chatbar .tt .p { direction: ltr; }
+
+  /* ---------- 电脑状态 ---------- */
+  .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 12px; }
+  .mcell .ml { font-size: 12px; color: var(--dim); }
+  .mcell .mn {
+    margin: 3px 0 6px; font-size: 21px; font-weight: 600; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .mcell .mn.warn { color: var(--warn); }
+  .mcell .ms { margin-top: 5px; }
+  .mon-body { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 0 var(--pad) 12px; }
+  .mcard {
+    background: var(--surface); border-radius: var(--r-lg);
+    padding: 14px 15px 13px; margin-bottom: 12px;
+  }
+  /* 点标题栏收起这一张卡，收起的偏好记在本地 */
+  .mh { display: flex; align-items: baseline; gap: 8px; cursor: pointer; }
+  .mh .foldic { color: var(--faint); transform: rotate(90deg); transition: transform .18s; align-self: center; }
+  .mcard.fold .mh .foldic { transform: none; }
+  .mcard.fold .mbody { display: none; }
+  .mh .mt { flex: 1 1 auto; font-size: 13px; color: var(--dim); }
+  .mh .mv {
+    font-size: 23px; font-weight: 600; letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .mh .mv.warn { color: var(--warn); }
+  .mh .mu { font-size: 12.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .ms { margin-top: 9px; font-size: 12px; color: var(--faint); }
+  .bar { height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; margin-top: 9px; }
+  .bar i { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+  .bar i.warn { background: var(--warn); }
+  /* Chart.js 要一个定高的容器 */
+  .chartbox { position: relative; height: 64px; margin-top: 10px; }
+  /* 每核占用：一根根小柱，核多核少都能自适应 */
+  .cores { display: flex; gap: 2px; height: 26px; margin-top: 10px; }
+  .cores i { flex: 1 1 0; min-width: 1px; border-radius: 2px; background: var(--surface-3); position: relative; }
+  .cores i b { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 2px; background: var(--accent); }
+  .cores i b.warn { background: var(--warn); }
+  .kv { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin-top: 10px; }
+  .kv .kn { flex: 1 1 auto; font-weight: 500; }
+  .kv .kv2 { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .draw { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin-top: 12px; }
+  .draw .dn { flex: 1 1 auto; font-weight: 500; }
+  .draw .dv { color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .mproc { display: flex; align-items: center; gap: 10px; padding: 9px 0; font-size: 13.5px; }
+  .mproc + .mproc { border-top: 1px solid var(--line); }
+  .mproc .pn { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mproc .pc { flex: 0 0 auto; color: var(--faint); font-size: 12px; }
+  .mproc .pm { flex: 0 0 auto; color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  /* ---------- 底部标签栏 ---------- */
+  nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    height: calc(var(--tabh) + var(--sab, env(safe-area-inset-bottom, 0px)));
+    padding-bottom: var(--sab, env(safe-area-inset-bottom, 0px));
+    /* 不透明纯色，别用 backdrop-filter：底部这条是 fixed 的，安卓 WebView 上
+       那块毛玻璃会让"内容从它后面滚过去"的每一帧都变贵，是滚动卡顿的常见来源。 */
+    display: flex; background: var(--bg);
+    border-top: 1px solid var(--line);
+  }
+  nav button {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; font-size: 11px; color: var(--faint); transition: color .15s;
+  }
+  nav button.on { color: var(--accent); }
+  nav button:active { opacity: .6; }
+
+  /* ---------- 对话：当前这条占主屏，其余对话收在左上角的抽屉里 ---------- */
+  #p-chats { bottom: var(--kb, 0px); }
+  #chat { flex: 1 1 auto; min-height: 0; display: none; flex-direction: column; }
+  #chat.on { display: flex; }
+  /* 一条对话都没有：抽屉里也没得挑，主屏给个空状态 */
+  #chat-none {
+    flex: 1 1 auto; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 0 30px 70px; text-align: center;
+  }
+  #chat-none.off { display: none; }
+  #chat-none .ic { width: 30px; height: 30px; color: var(--line); margin-bottom: 12px; }
+  #chat-none .e1 { font-size: 14px; color: var(--dim); }
+  #chat-none .e2 { font-size: 12.5px; color: var(--faint); margin-top: 5px; }
+  #chat-none .go {
+    margin-top: 18px; padding: 11px 24px; border-radius: var(--r-md);
+    background: var(--accent); color: var(--accent-ink); font-weight: 600;
+  }
+  /* 没打开任何一条对话时，右上角那个「···」没有对象可改 */
+  #chat-menu.off { display: none; }
+  /* 底部留白由页面统一让给标签栏，输入框这里不再叠一层安全区 */
+  #chat .composer { padding-bottom: 10px; }
+  /* 全部对话：从左边滑出来的抽屉，盖住标签栏 */
+  .drawer {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 46;
+    width: min(86vw, 380px); display: flex; flex-direction: column;
+    background: var(--surface); box-shadow: 0 0 46px rgba(0,0,0,.5);
+    padding: calc(var(--sat, env(safe-area-inset-top, 0px)) + 12px) 0
+             calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 8px);
+    transform: translateX(-103%); visibility: hidden;
+    transition: transform .26s cubic-bezier(.32,.72,0,1);
+  }
+  .drawer.on { transform: none; visibility: visible; }
+  .drawer .dhead { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; padding: 0 8px 10px var(--pad); }
+  .drawer .dhead .dt { flex: 1 1 auto; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .dmask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 45;
+    opacity: 0; pointer-events: none; transition: opacity .2s;
+  }
+  .dmask.on { opacity: 1; pointer-events: auto; }
+  .chatbar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 4px;
+    padding: calc(var(--sat, env(safe-area-inset-top, 0px)) + 8px) 8px 8px 6px;
+    background: var(--bg); position: relative; z-index: 2;
+  }
+  .chatbar .tt { flex: 1 1 auto; min-width: 0; padding: 0 2px; }
+  .chatbar .tt .t { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chatbar .tt .p { font-size: 11px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+  /* 连不上电脑时的一条提示。以前断了是静默的：页面照旧显示，
+     发出去的消息卡着不动，人只会以为"同步坏了"。 */
+  .offbar { display: none; padding: 6px 12px; font-size: 12px; color: #e8b48a;
+            background: #2a2320; border-bottom: 1px solid #3a2f28; }
+  .offbar.on { display: flex; align-items: center; gap: 6px; }
+  .offbar .ic { width: 14px; height: 14px; flex: 0 0 auto; }
+  /* 全部对话里的搜索框 */
+  .searchwrap { display: flex; align-items: center; gap: 8px; margin: 2px 12px 10px;
+                padding: 8px 12px; border-radius: 12px; background: var(--card, #1b1d1f); }
+  .searchwrap .ic { width: 16px; height: 16px; color: var(--faint); flex: 0 0 auto; }
+  .searchwrap input { flex: 1 1 auto; min-width: 0; background: none; border: 0; outline: 0;
+                      color: inherit; font-size: 14px; }
+  .grouphead .cv { width: 14px; height: 14px; margin-right: 4px; transition: transform .15s; }
+  .grouphead.fold .cv { transform: rotate(0deg); }
+  .grouphead.open .cv { transform: rotate(90deg); }
+  /* "用时 2 分 13 秒" 这类小注脚 */
+  .elapsed { text-align: center; font-size: 11px; color: var(--faint); margin: 6px 0 2px; }
+  /* 任务耗时小胶囊（居中、可关闭） */
+  .elapsedchip { display: flex; align-items: center; justify-content: center; gap: 6px;
+                 font-size: 12px; color: var(--faint); margin: 8px 0 2px; }
+  .elapsedchip .x { background: none; border: 0; color: inherit; font-size: 14px; line-height: 1; padding: 0 2px; }
+  /* 错误卡片：和正常回复明显分开 */
+  .errcard { border-radius: 14px; padding: 12px 14px; background: rgba(232,117,107,.12);
+             border: 1px solid rgba(232,117,107,.35); }
+  .errcard .etitle { display: flex; align-items: center; gap: 6px; font-weight: 600;
+                     color: #e8756b; margin-bottom: 6px; font-size: 13px; }
+  .errcard .ebody { font-size: 12.5px; line-height: 1.5; color: var(--text, #e7e9ea);
+                    white-space: pre-wrap; word-break: break-word; }
+  /* 选择题卡片 */
+  .qbox { margin: 8px 0 2px; }
+  .qhead { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
+  .qtext { font-size: 13px; color: var(--faint); margin-bottom: 6px; white-space: pre-wrap; }
+  .qopts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ap-btn.chosen { background: var(--accent, #69c497); color: #10211a; }
+  /* 待发送的附件：横排小图，点 ✕ 去掉 */
+  .attbar { display: none; gap: 8px; padding: 8px 12px 0; flex-wrap: wrap; }
+  .attbar.on { display: flex; }
+  .att { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden;
+         background: var(--card, #1b1d1f); display: flex; align-items: center; justify-content: center; }
+  .att img { width: 100%; height: 100%; object-fit: cover; }
+  .att .nm { font-size: 9px; padding: 3px; color: var(--faint); text-align: center; line-height: 1.2;
+             word-break: break-all; max-height: 100%; overflow: hidden; }
+  .att .rm { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%;
+             background: rgba(0,0,0,.62); color: #fff; font-size: 12px; line-height: 18px; text-align: center; }
+  .att.up { opacity: .55; }
+  /* 上一轮被打断时出现的"继续"条（和桌面版同一个形态） */
+  .contbar { display: none; padding: 0 12px 6px; }
+  .contbar.on { display: block; }
+  .contbar button { width: 100%; padding: 9px 12px; border-radius: 10px; font-size: 13px;
+                    color: var(--accent, #69c497); background: rgba(105,196,151,.12);
+                    border: 1px solid rgba(105,196,151,.35); }
+  /* 文件改动卡片：和桌面端一样"几个文件、增删多少行"；点开每个文件能看 diff */
+  .fcbox { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 2px 0 2px; padding: 12px 14px;
+           border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
+  .fcbox .lead { flex: 0 0 auto; color: var(--accent, #69c497); }
+  .fcbox .bd { flex: 1 1 auto; min-width: 0; }
+  .fcbox .t1 { font-size: 14px; font-weight: 600; }
+  .fcbox .t2 { font-size: 12px; margin-top: 2px; }
+  .fcbox .plus { color: #69c497; }
+  .fcbox .minus { color: #e8756b; margin-left: 6px; }
+  .fcbox .fcfiles { flex: 1 1 100%; margin-top: 6px; border-top: 1px solid var(--line); }
+  .fcfile .fn { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+                width: 100%; padding: 8px 0 4px; font-size: 12.5px; text-align: left; }
+  .fcfile .fn .p { color: var(--text); word-break: break-all; }
+  .fcfile .fn .s { flex: none; font-size: 11px; color: var(--faint); }
+  .fcfile pre { display: none; margin: 2px 0 8px; padding: 8px 10px; background: var(--bg);
+                border-radius: 8px; font-size: 11px; line-height: 1.5; overflow-x: auto;
+                white-space: pre; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .fcfile.open pre { display: block; }
+  .fcfile .dadd { color: #69c497; }
+  .fcfile .ddel { color: #e8756b; }
+  .fcfile .dmeta { color: var(--faint); }
+  /* 消息里的图片：点一下全屏看 */
+  .bubble img.mdimg { max-width: 100%; border-radius: 10px; display: block; margin: 6px 0; }
+  /* 图片预览：毛玻璃底 + 左右滑切图 + 双指缩放。
+     底不再用纯黑，用带模糊的半透明 —— 后面的对话内容透一点出来，
+     看得出"这是浮在对话之上"而不是切走了。 */
+  .imgview { position: fixed; inset: 0; z-index: 400;
+             display: none; align-items: center; justify-content: center;
+             background: rgba(10,11,14,.7);
+             backdrop-filter: blur(24px) saturate(1.3);
+             -webkit-backdrop-filter: blur(24px) saturate(1.3);
+             touch-action: none; }
+  .imgview.on { display: flex; }
+  .imgstage { position: absolute; inset: 0; display: flex;
+              align-items: center; justify-content: center; overflow: hidden; }
+  .imgstage img { max-width: 96vw; max-height: 82vh; object-fit: contain;
+              transition: transform .16s ease-out; will-change: transform; }
+  .imgstage img.snap { transition: none; }
+  /* 左上角关闭键：返回键也能退，但有个显式按钮更顺手 */
+  .imgx { position: absolute; left: 14px; top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 14px);
+          width: 38px; height: 38px; border-radius: 50%; border: 1px solid rgba(255,255,255,.16);
+          background: rgba(255,255,255,.12); color: #e6e7e9; font-size: 19px; line-height: 1;
+          display: flex; align-items: center; justify-content: center; z-index: 2; }
+  /* 第几张 / 共几张 */
+  .imgcount { position: absolute; top: calc(var(--sat, env(safe-area-inset-top, 0px)) + 26px);
+          left: 0; right: 0; text-align: center; color: rgba(230,231,233,.72);
+          font-size: 12px; pointer-events: none; }
+  /* 大图下面那排按钮：看细节用的「查看原图」和存到手机的「下载」 */
+  .imgbar { position: absolute; left: 0; right: 0;
+            bottom: calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 22px);
+            display: flex; gap: 10px; justify-content: center; }
+  .imgbar button { padding: 10px 18px; border-radius: 999px;
+            border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.1);
+            color: #e6e7e9; font-size: 13px; }
+  .imgbar button:disabled { opacity: .45; }
+  /* 语音输入：识别中话筒变强调色 */
+  #btn-voice.on { color: var(--accent, #69c497); background: rgba(105,196,151,.14); }
+  /* 助手消息下面的操作行 + "内容由AI生成" */
+  .actrow { display: flex; align-items: center; gap: 14px; padding: 2px 2px 0; color: var(--faint); }
+  .actrow button { background: none; border: 0; padding: 2px; color: inherit; }
+  .actrow .ic { width: 16px; height: 16px; }
+  .ailabel { font-size: 11px; color: var(--faint); padding: 2px 2px 8px; }
+  /* 全部对话：标题＋视图切换、圆形图标行、右下角悬浮新建 */
+  .dhead .dt { background: none; border: 0; color: inherit; font-size: 19px; font-weight: 700;
+               display: flex; align-items: center; gap: 4px; padding: 0; }
+  .dhead .dt .cv { width: 14px; height: 14px; color: var(--faint); }
+  .row .lead.round { width: 34px; height: 34px; border-radius: 50%; background: var(--surface);
+                     display: flex; align-items: center; justify-content: center; margin-right: 10px; }
+  .row .lead.round .ic { width: 17px; height: 17px; }
+  .row .t2 { font-size: 12px; color: var(--faint); margin-top: 2px; }
+  .fab { position: absolute; right: 16px; bottom: calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 18px);
+         width: 52px; height: 52px; border-radius: 50%; border: 0; z-index: 3;
+         background: var(--accent); color: var(--accent-ink);
+         display: flex; align-items: center; justify-content: center;
+         box-shadow: 0 8px 24px rgba(0,0,0,.45); }
+  .fab .ic { width: 22px; height: 22px; }
+  #log { flex: 1 1 auto; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 6px 14px 10px; }
+  /* "正在生成"提示条的家：钉在输入框上方，不进消息列表 */
+  #genhost { flex: 0 0 auto; padding: 0 14px; }
+  #genhost:empty { display: none; }
+  .mrow { display: flex; margin-bottom: 14px; }
+  .mrow.me { justify-content: flex-end; }
+  .bubble {
+    max-width: 86%; padding: 10px 13px; border-radius: var(--r-md);
+    background: var(--surface); border: 1px solid var(--line);
+    word-break: break-word; overflow-wrap: anywhere; font-size: 14.5px;
+  }
+  .mrow.me .bubble { background: var(--surface-3); border-color: transparent; white-space: pre-wrap; }
+  .mrow.ai .bubble { border-bottom-left-radius: 6px; }
+  .mrow.me .bubble { border-bottom-right-radius: 6px; }
+
+  /* ---------- 助手回复不做气泡 ----------
+     照 Codex 桌面版那样整幅排版：没有底色、没有边框、占满宽度。
+     气泡那种东西是给"我说的一句话"用的，长回答套在气泡里读着累。
+     只改外观、不改结构：里面的 markdown / 代码块 / 表格样式全部照旧生效。 */
+  .mrow.ai { display: block; margin-bottom: 18px; }
+  .mrow.ai .bubble {
+    max-width: 100%; padding: 0; border: 0; background: none; border-radius: 0;
+    font-size: 15px; line-height: 1.62;
+  }
+
+  /* ---------- 对话列表：照副屏那套（状态点 + 标题 + 状态 + 当前动作） ---------- */
+  #chats-list { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+  /* 进了对话就占满整屏：列表收起来、底部标签栏收起、输入框贴到屏幕底 */
+  #p-chats.chat-open #chats-list { display: none; }
+  #p-chats:not(.chat-open) .chatbar,
+  #p-chats:not(.chat-open) #chat,
+  #p-chats:not(.chat-open) #chat-none { display: none !important; }
+  body.inchat nav { display: none; }
+  body.inchat #p-chats { padding-bottom: 0; }
+
+  /* 顶上要给状态栏让位：--sat 是安卓壳量出来注入的（WebView 不报 safe-area-inset-top）。
+     这里原来没吃 --sat，"全部对话"就跟手机状态栏叠在一起了。 */
+  .listbar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+    padding: calc(var(--sat, env(safe-area-inset-top, 0px)) + 10px) var(--pad) 4px;
+  }
+  .listbar .lt {
+    display: flex; align-items: center; gap: 3px;
+    font-size: 19px; font-weight: 650; letter-spacing: -.01em; color: var(--text);
+  }
+  .listbar .lt .ic { width: 15px; height: 15px; color: var(--faint); }
+  .chips { flex: 0 0 auto; display: flex; gap: 7px; flex-wrap: wrap; padding: 4px var(--pad) 8px; }
+  .chip { padding: 3px 10px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--line); color: var(--faint); }
+  .chip.run { color: #7ee787; border-color: rgba(126,231,135,.45); }
+  .chip.stall { color: #f0b72f; border-color: rgba(240,183,47,.45); }
+  .chip.done { color: #79c0ff; border-color: rgba(121,192,255,.45); }
+
+  .clist { background: var(--surface); border-radius: var(--r-lg); overflow: hidden; }
+  .citem {
+    display: flex; gap: 10px; width: 100%; text-align: left;
+    padding: 11px 13px; border-bottom: 1px solid var(--line);
+  }
+  .citem:last-child { border-bottom: none; }
+  .citem.on { background: rgba(105, 196, 151, .07); }
+  .cdot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); margin-top: 6px; }
+  .citem.run .cdot { background: #7ee787; box-shadow: 0 0 6px #7ee787; animation: pulse 1.6s ease-in-out infinite; }
+  .citem.stall .cdot { background: #f0b72f; }
+  .citem.bad .cdot { background: #f85149; }
+  .citem.stop .cdot { background: #a371f7; }
+  .citem.done .cdot { background: #58a6ff; }
+  .cbody { display: block; flex: 1 1 auto; min-width: 0; }
+  .crow { display: flex; align-items: baseline; gap: 8px; }
+  .ctitle {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 14.5px; color: var(--text);
+  }
+  .cstat { flex: 0 0 auto; font-size: 11.5px; color: var(--faint); }
+  .citem.run .cstat { color: #7ee787; }
+  .citem.stall .cstat { color: #f0b72f; }
+  .citem.bad .cstat { color: #f85149; }
+  .citem.stop .cstat { color: #a371f7; }
+  .citem.done .cstat { color: #79c0ff; }
+  .cmeta {
+    display: block; margin-top: 2px; font-size: 11.5px; color: var(--faint);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cact {
+    display: block; margin-top: 2px; font-size: 11.5px; color: var(--dim);
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* 离线发件箱：没发出去的消息是虚线气泡，底下一行小字告诉你它在等什么 */
+  .bubble.pending { opacity: .78; border: 1px dashed var(--faint); background: transparent; }
+  .bubble.pending .qtag {
+    margin-top: 7px; padding-top: 6px; border-top: 1px dashed var(--line);
+    font-size: 11px; line-height: 1.4; color: var(--faint); white-space: normal;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .bubble.pending .qtag .spin { width: 11px; height: 11px; flex: none; }
+  .bubble h2, .bubble h3 { margin: 10px 0 6px; font-size: 15px; letter-spacing: -.01em; }
+  .bubble code { background: #0b0c0f; border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; font-size: 12.5px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .bubble pre { position: relative; background: #0b0c0f; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 12px 10px 10px; overflow-x: auto; margin: 8px 0; }
+  .bubble pre code { background: none; border: none; padding: 0; font-size: 12px; line-height: 1.5; white-space: pre; }
+  /* 表格：手机上再宽的表也不横着撑破气泡。外面套一层横向滑动的壳，
+     第一列钉在左边不动，滑后面的数字列时始终知道自己在看哪一行。 */
+  .bubble .tw { margin: 9px 0; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    border: 1px solid var(--line); border-radius: var(--r-sm); background: #0b0c0f; }
+  .bubble .tw table { border-collapse: collapse; font-size: 12.5px; line-height: 1.45;
+    width: max-content; min-width: 100%; }
+  .bubble .tw th, .bubble .tw td { padding: 7px 10px; text-align: left; vertical-align: top;
+    white-space: nowrap; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
+  .bubble .tw th { background: var(--surface-2); color: var(--dim); font-weight: 600; }
+  .bubble .tw tr:last-child td { border-bottom: none; }
+  .bubble .tw th:last-child, .bubble .tw td:last-child { border-right: none; }
+  .bubble .tw th:first-child, .bubble .tw td:first-child { position: sticky; left: 0; z-index: 1;
+    background: #0b0c0f; white-space: normal; max-width: 42vw; }
+  .bubble .tw th:first-child { background: var(--surface-2); z-index: 2; }
+  .bubble .tw .ta-c { text-align: center; }
+  .bubble .tw .ta-r { text-align: right; }
+  /* 有表格的那条消息放宽到整行，别让表格挤在 86% 里（老 WebView 不支持 :has 就跳过） */
+  .mrow.ai .bubble:has(.tw) { max-width: 100%; }
+  .copybtn { position: absolute; top: 6px; right: 6px; font-size: 11px; padding: 3px 9px; background: var(--surface-2); color: var(--dim); border-radius: 999px; }
+  .acts { margin: -8px 0 12px 2px; }
+  .act { font-size: 12px; color: var(--faint); padding: 1px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .caret::after { content: "▍"; animation: blink 1s steps(2, start) infinite; color: var(--accent); }
+  @keyframes blink { to { visibility: hidden; } }
+  .composer {
+    flex: 0 0 auto; display: block;
+    padding: 8px 12px calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 10px);
+    border-top: 1px solid var(--line);
+    background: var(--bg); position: relative; z-index: 2;
+  }
+  /* 三个按钮 + 输入框合到同一个框里：外框从原来只圈文字，扩成把
+     附件、语音、发送一起框进来。按钮自己的位置、大小、间距都没动，
+     只是换了外面那层底色和描边。 */
+  .composer .cbox {
+    display: flex; align-items: flex-end; gap: 8px;
+    padding: 4px;
+    border: 1px solid var(--line); border-radius: 22px;
+    background: var(--surface);
+  }
+  .composer .cbox:focus-within { border-color: var(--accent); }
+  .composer textarea {
+    flex: 1; min-width: 0; resize: none; max-height: 132px; min-height: 42px; padding: 10px 6px;
+    border: 0; background: transparent; outline: none;
+  }
+  .send {
+    /* 圆形发送键（跟常见手机端聊天一致）：空闲是向上箭头，跑着时变成停止方块 */
+    flex: 0 0 auto; width: 44px; height: 44px; padding: 0; border: 0;
+    border-radius: 50%; background: var(--accent); color: var(--accent-ink);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .send .ic { width: 20px; height: 20px; }
+  .send.stop { background: #e8756b; color: #2a1512; }
+  }
+  .send:disabled { opacity: .45; }
+  .send.stop { background: var(--danger); color: #1a0d0b; }
+
+  /* 审批卡片 */
+  .bubble.approval { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); max-width: 100%; width: 100%; }
+  .ap-title { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 600; margin-bottom: 9px; color: var(--warn); }
+  .ap-detail { margin: 0 0 9px; padding: 9px 10px; border-radius: var(--r-sm); background: #0b0c0f; border: 1px solid var(--line); font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 30dvh; overflow: auto; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .ap-reason { font-size: 12.5px; color: var(--dim); margin-bottom: 12px; }
+  .ap-bar { display: flex; gap: 7px; flex-wrap: wrap; }
+  .ap-btn { flex: 1 1 auto; min-width: 84px; padding: 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface-2); font-size: 13px; }
+  .ap-btn.ok { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .ap-btn.no { color: var(--danger); }
+  .ap-btn:disabled { opacity: .4; }
+  .ap-btn.chosen { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .ap-note { margin-top: 9px; font-size: 12px; color: var(--faint); }
+
+  /* ---------- 弹层 / 轻提示 ---------- */
+  .mask { position: fixed; inset: 0; background: rgba(0,0,0,.5); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 50; }
+  .mask.on { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: fixed; left: 0; right: 0; bottom: var(--kb, 0px); z-index: 51;
+    background: var(--surface); border-radius: var(--r-lg) var(--r-lg) 0 0;
+    padding: 10px var(--pad) calc(var(--sab, env(safe-area-inset-bottom, 0px)) + 18px);
+    transform: translateY(103%); transition: transform .24s cubic-bezier(.32,.72,0,1);
+    max-height: 88dvh; overflow-y: auto;
+  }
+  .sheet.on { transform: none; }
+  .sheet .grab { width: 34px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto 14px; }
+  .sheet h3 { margin: 0 0 6px; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .sheet .desc { color: var(--dim); font-size: 13px; margin-bottom: 4px; }
+  .sheet .desc a.lnk { color: var(--accent); text-decoration: none; word-break: break-all; }
+  .sheet label { display: block; font-size: 12.5px; color: var(--dim); margin: 14px 0 6px; }
+  .sheet input, .sheet select, .sheet textarea {
+    width: 100%; padding: 12px; border-radius: var(--r-md); border: 1px solid var(--line);
+    background: var(--surface-2); outline: none;
+  }
+  .sheet input:focus, .sheet select:focus { border-color: var(--accent); }
+  .sheet .actions { display: flex; gap: 9px; margin-top: 20px; }
+  .sheet .actions button { flex: 1; padding: 13px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface-2); }
+  .sheet .actions .go { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  .sheet .actions .no { color: var(--danger); }
+
+  #toast {
+    position: fixed; left: 50%; bottom: calc(var(--tabh) + var(--sab, env(safe-area-inset-bottom, 0px)) + 20px);
+    transform: translate(-50%, 10px); z-index: 60;
+    background: var(--surface-3); color: var(--text);
+    padding: 11px 18px; border-radius: var(--r-md); font-size: 13.5px; max-width: 86vw;
+    opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s;
+  }
+  #toast.on { opacity: 1; transform: translate(-50%, 0); }
+
+  /* 状态 */
+  .skeleton { background: var(--surface); border-radius: var(--r-lg); overflow: hidden; }
+  .sk-row { display: flex; align-items: center; gap: 13px; padding: 14px; }
+  .sk-row + .sk-row { border-top: 1px solid var(--line); }
+  .sk { background: var(--surface-2); border-radius: 6px; height: 12px; }
+  .sk.round { width: 22px; height: 22px; border-radius: 6px; flex: 0 0 auto; }
+  .sk.line1 { width: 56%; }
+  .sk.line2 { width: 34%; height: 10px; margin-top: 7px; }
+  @keyframes pulse { 50% { opacity: .45; } }
+  .sk, .sk.round { animation: pulse 1.4s ease-in-out infinite; }
+  .empty { text-align: center; padding: 40px 24px; color: var(--faint); }
+  .empty .ic { margin: 0 auto 12px; color: var(--line); width: 30px; height: 30px; }
+  .empty .e1 { font-size: 14px; color: var(--dim); }
+  .empty .e2 { font-size: 12.5px; margin-top: 5px; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none">
+  <symbol id="i-arrow-circle-down" viewBox="0 0 256 256"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm37.66-85.66a8,8,0,0,1,0,11.32l-32,32a8,8,0,0,1-11.32,0l-32-32a8,8,0,0,1,11.32-11.32L120,148.69V88a8,8,0,0,1,16,0v60.69l18.34-18.35A8,8,0,0,1,165.66,130.34Z"/></symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 256 256"><path d="M224,128a8,8,0,0,1-8,8H59.31l58.35,58.34a8,8,0,0,1-11.32,11.32l-72-72a8,8,0,0,1,0-11.32l72-72a8,8,0,0,1,11.32,11.32L59.31,120H216A8,8,0,0,1,224,128Z"/></symbol>
+  <symbol id="i-arrows-clockwise" viewBox="0 0 256 256"><path d="M224,48V96a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h28.69L182.06,73.37a79.56,79.56,0,0,0-56.13-23.43h-.45A79.52,79.52,0,0,0,69.59,72.71,8,8,0,0,1,58.41,61.27a96,96,0,0,1,135,.79L208,76.69V48a8,8,0,0,1,16,0ZM186.41,183.29a80,80,0,0,1-112.47-.66L59.31,168H88a8,8,0,0,0,0-16H40a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V179.31l14.63,14.63A95.43,95.43,0,0,0,130,222.06h.53a95.36,95.36,0,0,0,67.07-27.33,8,8,0,0,0-11.18-11.44Z"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 256 256"><path d="M221.8,175.94C216.25,166.38,208,139.33,208,104a80,80,0,1,0-160,0c0,35.34-8.26,62.38-13.81,71.94A16,16,0,0,0,48,200H88.81a40,40,0,0,0,78.38,0H208a16,16,0,0,0,13.8-24.06ZM128,216a24,24,0,0,1-22.62-16h45.24A24,24,0,0,1,128,216ZM48,184c7.7-13.24,16-43.92,16-80a64,64,0,1,1,128,0c0,36.05,8.28,66.73,16,80Z"/></symbol>
+  <symbol id="i-newspaper" viewBox="0 0 256 256"><path d="M88,112a8,8,0,0,1,8-8h80a8,8,0,0,1,0,16H96A8,8,0,0,1,88,112Zm8,40h80a8,8,0,0,0,0-16H96a8,8,0,0,0,0,16ZM232,64V184a24,24,0,0,1-24,24H32A24,24,0,0,1,8,184.11V88a8,8,0,0,1,16,0v96a8,8,0,0,0,16,0V64A16,16,0,0,1,56,48H216A16,16,0,0,1,232,64Zm-16,0H56V184a23.84,23.84,0,0,1-1.37,8H208a8,8,0,0,0,8-8Z"/></symbol>
+  <symbol id="i-caret-right" viewBox="0 0 256 256"><path d="M181.66,133.66l-80,80a8,8,0,0,1-11.32-11.32L164.69,128,90.34,53.66a8,8,0,0,1,11.32-11.32l80,80A8,8,0,0,1,181.66,133.66Z"/></symbol>
+  <symbol id="i-chat-circle-dots" viewBox="0 0 256 256"><path d="M140,128a12,12,0,1,1-12-12A12,12,0,0,1,140,128ZM84,116a12,12,0,1,0,12,12A12,12,0,0,0,84,116Zm88,0a12,12,0,1,0,12,12A12,12,0,0,0,172,116Zm60,12A104,104,0,0,1,79.12,219.82L45.07,231.17a16,16,0,0,1-20.24-20.24l11.35-34.05A104,104,0,1,1,232,128Zm-16,0A88,88,0,1,0,51.81,172.06a8,8,0,0,1,.66,6.54L40,216,77.4,203.53a7.85,7.85,0,0,1,2.53-.42,8,8,0,0,1,4,1.08A88,88,0,0,0,216,128Z"/></symbol>
+  <symbol id="i-check-circle" viewBox="0 0 256 256"><path d="M173.66,98.34a8,8,0,0,1,0,11.32l-56,56a8,8,0,0,1-11.32,0l-24-24a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35A8,8,0,0,1,173.66,98.34ZM232,128A104,104,0,1,1,128,24,104.11,104.11,0,0,1,232,128Zm-16,0a88,88,0,1,0-88,88A88.1,88.1,0,0,0,216,128Z"/></symbol>
+  <symbol id="i-circle-notch" viewBox="0 0 256 256"><path d="M232,128a104,104,0,0,1-208,0c0-41,23.81-78.36,60.66-95.27a8,8,0,0,1,6.68,14.54C60.15,61.59,40,93.27,40,128a88,88,0,0,0,176,0c0-34.73-20.15-66.41-51.34-80.73a8,8,0,0,1,6.68-14.54C208.19,49.64,232,87,232,128Z"/></symbol>
+  <symbol id="i-desktop" viewBox="0 0 256 256"><path d="M208,40H48A24,24,0,0,0,24,64V176a24,24,0,0,0,24,24h72v16H96a8,8,0,0,0,0,16h64a8,8,0,0,0,0-16H136V200h72a24,24,0,0,0,24-24V64A24,24,0,0,0,208,40ZM48,56H208a8,8,0,0,1,8,8v80H40V64A8,8,0,0,1,48,56ZM208,184H48a8,8,0,0,1-8-8V160H216v16A8,8,0,0,1,208,184Z"/></symbol>
+  <symbol id="i-dots-three" viewBox="0 0 256 256"><path d="M140,128a12,12,0,1,1-12-12A12,12,0,0,1,140,128Zm56-12a12,12,0,1,0,12,12A12,12,0,0,0,196,116ZM60,116a12,12,0,1,0,12,12A12,12,0,0,0,60,116Z"/></symbol>
+  <symbol id="i-folder-simple" viewBox="0 0 256 256"><path d="M216,72H130.67L102.93,51.2a16.12,16.12,0,0,0-9.6-3.2H40A16,16,0,0,0,24,64V200a16,16,0,0,0,16,16H216.89A15.13,15.13,0,0,0,232,200.89V88A16,16,0,0,0,216,72Zm0,128H40V64H93.33L123.2,86.4A8,8,0,0,0,128,88h88Z"/></symbol>
+  <symbol id="i-gear-six" viewBox="0 0 256 256"><path d="M128,80a48,48,0,1,0,48,48A48.05,48.05,0,0,0,128,80Zm0,80a32,32,0,1,1,32-32A32,32,0,0,1,128,160Zm109.94-52.79a8,8,0,0,0-3.89-5.4l-29.83-17-.12-33.62a8,8,0,0,0-2.83-6.08,111.91,111.91,0,0,0-36.72-20.67,8,8,0,0,0-6.46.59L128,41.85,97.88,25a8,8,0,0,0-6.47-.6A112.1,112.1,0,0,0,54.73,45.15a8,8,0,0,0-2.83,6.07l-.15,33.65-29.83,17a8,8,0,0,0-3.89,5.4,106.47,106.47,0,0,0,0,41.56,8,8,0,0,0,3.89,5.4l29.83,17,.12,33.62a8,8,0,0,0,2.83,6.08,111.91,111.91,0,0,0,36.72,20.67,8,8,0,0,0,6.46-.59L128,214.15,158.12,231a7.91,7.91,0,0,0,3.9,1,8.09,8.09,0,0,0,2.57-.42,112.1,112.1,0,0,0,36.68-20.73,8,8,0,0,0,2.83-6.07l.15-33.65,29.83-17a8,8,0,0,0,3.89-5.4A106.47,106.47,0,0,0,237.94,107.21Zm-15,34.91-28.57,16.25a8,8,0,0,0-3,3c-.58,1-1.19,2.06-1.81,3.06a7.94,7.94,0,0,0-1.22,4.21l-.15,32.25a95.89,95.89,0,0,1-25.37,14.3L134,199.13a8,8,0,0,0-3.91-1h-.19c-1.21,0-2.43,0-3.64,0a8.08,8.08,0,0,0-4.1,1l-28.84,16.1A96,96,0,0,1,67.88,201l-.11-32.2a8,8,0,0,0-1.22-4.22c-.62-1-1.23-2-1.8-3.06a8.09,8.09,0,0,0-3-3.06l-28.6-16.29a90.49,90.49,0,0,1,0-28.26L61.67,97.63a8,8,0,0,0,3-3c.58-1,1.19-2.06,1.81-3.06a7.94,7.94,0,0,0,1.22-4.21l.15-32.25a95.89,95.89,0,0,1,25.37-14.3L122,56.87a8,8,0,0,0,4.1,1c1.21,0,2.43,0,3.64,0a8.08,8.08,0,0,0,4.1-1l28.84-16.1A96,96,0,0,1,188.12,55l.11,32.2a8,8,0,0,0,1.22,4.22c.62,1,1.23,2,1.8,3.06a8.09,8.09,0,0,0,3,3.06l28.6,16.29A90.49,90.49,0,0,1,222.9,142.12Z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 256 256"><path d="M224,128a8,8,0,0,1-8,8H136v80a8,8,0,0,1-16,0V136H40a8,8,0,0,1,0-16h80V40a8,8,0,0,1,16,0v80h80A8,8,0,0,1,224,128Z"/></symbol>
+  <symbol id="i-shield-check" viewBox="0 0 256 256"><path d="M208,40H48A16,16,0,0,0,32,56v56c0,52.72,25.52,84.67,46.93,102.19,23.06,18.86,46,25.26,47,25.53a8,8,0,0,0,4.2,0c1-.27,23.91-6.67,47-25.53C198.48,196.67,224,164.72,224,112V56A16,16,0,0,0,208,40Zm0,72c0,37.07-13.66,67.16-40.6,89.42A129.3,129.3,0,0,1,128,223.62a128.25,128.25,0,0,1-38.92-21.81C61.82,179.51,48,149.3,48,112l0-56,160,0ZM82.34,141.66a8,8,0,0,1,11.32-11.32L112,148.69l50.34-50.35a8,8,0,0,1,11.32,11.32l-56,56a8,8,0,0,1-11.32,0Z"/></symbol>
+  <symbol id="i-squares-four" viewBox="0 0 256 256"><path d="M104,40H56A16,16,0,0,0,40,56v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V56A16,16,0,0,0,104,40Zm0,64H56V56h48v48Zm96-64H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,64H152V56h48v48Zm-96,32H56a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,104,136Zm0,64H56V152h48v48Zm96-64H152a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16h48a16,16,0,0,0,16-16V152A16,16,0,0,0,200,136Zm0,64H152V152h48v48Z"/></symbol>
+  <symbol id="i-warning-circle" viewBox="0 0 256 256"><path d="M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm-8-80V80a8,8,0,0,1,16,0v56a8,8,0,0,1-16,0Zm20,36a12,12,0,1,1-12-12A12,12,0,0,1,140,172Z"/></symbol>
+  <symbol id="i-paper-plane-tilt" viewBox="0 0 256 256"><path d="M227.32,28.68a16,16,0,0,0-15.66-4.08l-.15,0L19.57,82.84a16,16,0,0,0-2.49,29.8L102,154l41.3,84.87A15.86,15.86,0,0,0,157.74,248q.69,0,1.38-.06a15.88,15.88,0,0,0,14-11.51l58.2-191.94c0-.05,0-.1,0-.15A16,16,0,0,0,227.32,28.68ZM157.83,231.85l-.05.14,0-.07-40.06-82.3,48-48a8,8,0,0,0-11.31-11.31l-48,48L24.08,98.25l-.07,0,.14,0L216,40Z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 256 256"><path d="M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16ZM216,184H40a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 256 256"><path d="M207.06,72.67A111.24,111.24,0,0,0,128,40h-.4C66.07,40.21,16,91,16,153.13V176a16,16,0,0,0,16,16H224a16,16,0,0,0,16-16V152A111.25,111.25,0,0,0,207.06,72.67ZM224,176H119.71l54.76-75.3a8,8,0,0,0-12.94-9.42L99.92,176H32V153.13c0-3.08.15-6.12.43-9.13H56a8,8,0,0,0,0-16H35.27c10.32-38.86,44-68.24,84.73-71.66V80a8,8,0,0,0,16,0V56.33A96.14,96.14,0,0,1,221,128H200a8,8,0,0,0,0,16h23.67c.21,2.65.33,5.31.33,8Z"/></symbol>
+  <symbol id="i-hard-drives" viewBox="0 0 256 256"><path d="M208,136H48a16,16,0,0,0-16,16v48a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V152A16,16,0,0,0,208,136Zm0,64H48V152H208v48Zm0-160H48A16,16,0,0,0,32,56v48a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V56A16,16,0,0,0,208,40Zm0,64H48V56H208v48ZM192,80a12,12,0,1,1-12-12A12,12,0,0,1,192,80Zm0,96a12,12,0,1,1-12-12A12,12,0,0,1,192,176Z"/></symbol>
+  <symbol id="i-images" viewBox="0 0 256 256"><path d="M216,40H72A16,16,0,0,0,56,56V72H40A16,16,0,0,0,24,88V200a16,16,0,0,0,16,16H184a16,16,0,0,0,16-16V184h16a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM72,56H216v62.75l-10.07-10.06a16,16,0,0,0-22.63,0l-20,20-44-44a16,16,0,0,0-22.62,0L72,109.37ZM184,200H40V88H56v80a16,16,0,0,0,16,16H184Zm32-32H72V132l36-36,49.66,49.66a8,8,0,0,0,11.31,0L194.63,120,216,141.38V168ZM160,84a12,12,0,1,1,12,12A12,12,0,0,1,160,84Z"/></symbol>
+  <symbol id="i-film-strip" viewBox="0 0 256 256"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,88h80v80H40Zm96-16V56h32V72Zm-16,0H88V56h32Zm0,112v16H88V184Zm16,0h32v16H136Zm0-16V88h80v80Zm80-96H184V56h32ZM72,56V72H40V56ZM40,184H72v16H40Zm176,16H184V184h32v16Z"/></symbol>
+  <symbol id="i-cube" viewBox="0 0 256 256"><path d="M223.68,66.15,135.68,18h0a15.88,15.88,0,0,0-15.36,0l-88,48.17a16,16,0,0,0-8.32,14v95.64a16,16,0,0,0,8.32,14l88,48.17a15.88,15.88,0,0,0,15.36,0l88-48.17a16,16,0,0,0,8.32-14V80.18A16,16,0,0,0,223.68,66.15ZM128,32h0l80.34,44L128,120,47.66,76ZM40,90l80,43.78v85.79L40,175.82Zm96,129.57V133.82L216,90v85.78Z"/></symbol>
+  <symbol id="i-flow-arrow" viewBox="0 0 256 256"><path d="M245.66,74.34l-32-32a8,8,0,0,0-11.32,11.32L220.69,72H208c-49.33,0-61.05,28.12-71.38,52.92-9.38,22.51-16.92,40.59-49.48,42.84a40,40,0,1,0,.1,16c43.26-2.65,54.34-29.15,64.14-52.69C161.41,107,169.33,88,208,88h12.69l-18.35,18.34a8,8,0,0,0,11.32,11.32l32-32A8,8,0,0,0,245.66,74.34ZM48,200a24,24,0,1,1,24-24A24,24,0,0,1,48,200Z"/></symbol>
+  <symbol id="i-lock-key" viewBox="0 0 256 256"><path d="M128,112a28,28,0,0,0-8,54.83V184a8,8,0,0,0,16,0V166.83A28,28,0,0,0,128,112Zm0,40a12,12,0,1,1,12-12A12,12,0,0,1,128,152Zm80-72H176V56a48,48,0,0,0-96,0V80H48A16,16,0,0,0,32,96V208a16,16,0,0,0,16,16H208a16,16,0,0,0,16-16V96A16,16,0,0,0,208,80ZM96,56a32,32,0,0,1,64,0V80H96ZM208,208H48V96H208V208Z"/></symbol>
+  <symbol id="i-magnifying-glass" viewBox="0 0 256 256"><path d="M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"/></symbol>
+  <symbol id="i-paperclip" viewBox="0 0 256 256"><path d="M209.66,122.34a8,8,0,0,1,0,11.32l-82.05,82a56,56,0,0,1-79.2-79.21L147.67,35.73a40,40,0,1,1,56.61,56.55L105,193A24,24,0,1,1,71,159L154.3,74.38A8,8,0,1,1,165.7,85.6L82.39,170.31a8,8,0,1,0,11.27,11.36L192.93,81A24,24,0,1,0,159,47L59.76,147.68a40,40,0,1,0,56.53,56.62l82.06-82A8,8,0,0,1,209.66,122.34Z"/></symbol>
+  <symbol id="i-microphone" viewBox="0 0 256 256"><path d="M128,24a40,40,0,0,0-40,40v64a40,40,0,0,0,80,0V64a40,40,0,0,0-40-40Zm32,104a32,32,0,0,1-64,0V64a32,32,0,0,1,64,0Zm16,0a8,8,0,0,1,16,0,72,72,0,0,1-64,71.6V232h24a8,8,0,0,1,0,16H88a8,8,0,0,1,0-16h24v-32.4A72,72,0,0,1,48,128a8,8,0,0,1,16,0,56,56,0,0,0,112,0,8,8,0,0,1,16,0Z"/></symbol>
+  <!-- 图标一律用 Phosphor 官方路径，不许手写：07-05 手拼的 arrow-up 画出来是朝下的 -->
+  <symbol id="i-arrow-up" viewBox="0 0 256 256"><path d="M205.66,117.66a8,8,0,0,1-11.32,0L136,59.31V216a8,8,0,0,1-16,0V59.31L61.66,117.66a8,8,0,0,1-11.32-11.32l72-72a8,8,0,0,1,11.32,0l72,72A8,8,0,0,1,205.66,117.66Z"/></symbol>
+  <symbol id="i-stop-fill" viewBox="0 0 256 256"><path d="M200,40H56A16,16,0,0,0,40,56V200a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,160H56V56H200V200Z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 256 256"><path d="M216,32H88a8,8,0,0,0-8,8V80H40a8,8,0,0,0-8,8V216a8,8,0,0,0,8,8H168a8,8,0,0,0,8-8V176h40a8,8,0,0,0,8-8V40A8,8,0,0,0,216,32ZM160,208H48V96H160Zm48-48H176V88a8,8,0,0,0-8-8H96V48H208Z"/></symbol>
+  <symbol id="i-arrow-clockwise" viewBox="0 0 256 256"><path d="M240,56v48a8,8,0,0,1-8,8H184a8,8,0,0,1,0-16H211.4L184.81,71.64l-.25-.24a80,80,0,1,0-1.67,114.78,8,8,0,0,1,11,11.63A95.44,95.44,0,0,1,128,224h-1.32A96,96,0,1,1,195.75,60L224,85.8V56a8,8,0,1,1,16,0Z"/></symbol>
+  <symbol id="i-caret-down" viewBox="0 0 256 256"><path d="M213.66,101.66l-80,80a8,8,0,0,1-11.32,0l-80-80A8,8,0,0,1,53.66,90.34L128,164.69l74.34-74.35a8,8,0,0,1,11.32,11.32Z"/></symbol>
+</svg>
+
+<!-- 对话：列表页是主屏；点一条进去占满整屏，返回键回列表 -->
+<section class="page on" id="p-chats">
+  <!-- 列表页：一行一条 —— 状态点 + 标题 + 状态词 + "现在在干什么"。
+       格式照副屏的 MMM-CodexStatus：颜色即状态，第三行是实时动作，
+       一眼就能扫出哪条在跑、哪条卡住了。 -->
+  <div id="chats-list">
+    <div class="listbar">
+      <button class="lt" id="view-switch">全部对话 <svg class="ic"><use href="#i-caret-down"/></svg></button>
+      <div class="sp" style="flex:1 1 auto"></div>
+      <button class="iconbtn" id="btn-new" aria-label="新对话"><svg class="ic"><use href="#i-plus"/></svg></button>
+    </div>
+    <div class="chips" id="chats-sum"></div>
+    <div class="scroll" id="chats-scroll">
+      <div class="ptr" id="ptr"><svg class="ic sm sp"><use href="#i-circle-notch"/></svg><span id="ptr-text">下拉刷新</span></div>
+      <div class="imp done" id="chats-imp"></div>
+      <div class="searchwrap"><svg class="ic"><use href="#i-magnifying-glass"/></svg><input id="chat-search" type="search" placeholder="搜索对话或项目" autocomplete="off"></div>
+      <div id="chats-body"></div>
+    </div>
+    <button class="fab" id="btn-new-fab" aria-label="新对话"><svg class="ic"><use href="#i-plus"/></svg></button>
+  </div>
+
+  <div class="chatbar">
+    <button class="iconbtn" id="chat-back" aria-label="返回列表"><svg class="ic"><use href="#i-arrow-left"/></svg></button>
+    <div class="tt"><div class="t" id="chat-title">对话</div><div class="p" id="chat-path"></div></div>
+    <span class="rundot" id="chat-rundot" title="这条对话正在生成"></span>
+    <button class="iconbtn off" id="chat-menu" aria-label="更多"><svg class="ic"><use href="#i-dots-three"/></svg></button>
+  </div>
+  <div class="offbar" id="offbar"><svg class="ic"><use href="#i-warning-circle"/></svg><span id="offtext">连不上电脑，正在重试</span></div>
+  <div id="chat">
+    <div id="log"></div>
+    <!-- 正在生成的提示条挂在这儿，不进消息列表：#log 每次重画都是 innerHTML=''，
+         挂在里面会被顺手抹掉 —— 这就是"出现文字后提示条就没了"的原因 -->
+    <div id="genhost"></div>
+    <div class="composer">
+      <div class="cbox">
+        <button class="iconbtn" id="btn-attach" aria-label="加图片或文件"><svg class="ic"><use href="#i-paperclip"/></svg></button>
+        <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.log,.yaml,.yml,.zip,.docx,.xlsx" style="display:none">
+        <textarea id="input" rows="1" placeholder="说点什么"></textarea>
+        <button class="iconbtn" id="btn-voice" aria-label="语音输入"><svg class="ic"><use href="#i-microphone"/></svg></button>
+        <button class="send" id="send">发送</button>
+      </div>
+    </div>
+    <div class="attbar" id="attbar"></div>
+    <div class="contbar" id="contbar"><button id="cont-btn">上一轮被打断了 · 继续</button></div>
+  </div>
+  <div id="chat-none" class="off">
+    <svg class="ic"><use href="#i-chat-circle-dots"/></svg>
+    <div class="e1">还没有对话</div>
+    <div class="e2">点下面的按钮新建一条，或者到左上角挑电脑上已有的对话</div>
+    <button class="go" id="chat-none-new">新建一条</button>
+  </div>
+</section>
+
+<!-- 服务 -->
+<section class="page" id="p-services">
+  <div class="appbar"><h1>服务</h1></div>
+  <div class="scroll" id="services-body"></div>
+</section>
+
+<!-- 通知 -->
+<section class="page" id="p-feed">
+  <div class="appbar">
+    <h1>通知</h1><div class="sp"></div>
+    <span class="tail" id="feed-state" style="color:var(--faint);font-size:12px;padding-right:8px"></span>
+    <button class="iconbtn" id="feed-refresh" aria-label="刷新"><svg class="ic"><use href="#i-arrows-clockwise"/></svg></button>
+  </div>
+  <div class="scroll" id="feed-body"></div>
+</section>
+
+<!-- 我的 -->
+<section class="page" id="p-me">
+  <div class="appbar"><h1>我的</h1></div>
+  <div class="scroll" id="me-body"></div>
+</section>
+
+<nav>
+  <button class="on" data-tab="chats"><svg class="ic"><use href="#i-chat-circle-dots"/></svg>对话</button>
+  <button data-tab="services"><svg class="ic"><use href="#i-squares-four"/></svg>服务</button>
+  <button data-tab="feed"><svg class="ic"><use href="#i-bell"/></svg>通知</button>
+  <button data-tab="me"><svg class="ic"><use href="#i-gear-six"/></svg>我的</button>
+</nav>
+
+<!-- 电脑状态：从「服务」里点开，看这台电脑的实时负载 -->
+<section id="sysmon">
+  <div class="chatbar">
+    <button class="iconbtn" id="mon-back" aria-label="返回"><svg class="ic"><use href="#i-arrow-left"/></svg></button>
+    <div class="tt"><div class="t">电脑状态</div><div class="p" id="mon-sub"></div></div>
+    <button class="iconbtn" id="mon-refresh" aria-label="刷新"><svg class="ic"><use href="#i-arrows-clockwise"/></svg></button>
+  </div>
+  <div class="mon-body" id="mon-body"></div>
+</section>
+
+<div class="mask" id="mask"></div>
+<div class="sheet" id="sheet"></div>
+<div id="toast"></div>
+<div class="imgview" id="imgview">
+  <button class="imgx" id="imgview-close" aria-label="关闭">×</button>
+  <div class="imgcount" id="imgview-count"></div>
+  <div class="imgstage" id="imgstage">
+    <img id="imgview-img" alt="">
+  </div>
+  <div class="imgbar">
+    <button id="imgview-orig">查看原图</button>
+    <button id="imgview-save">下载</button>
+  </div>
+</div>
+
+<!-- 图表库：Chart.js v4.5.1（MIT），跟电脑端一起发出去，不走外网 CDN -->
+<script src="chart.umd.min.js?k=__TOKEN__&v=4.5.1"></script>
+<script>
+const TOKEN = "__TOKEN__";
+// 这一份外壳是电脑上哪个版本发出来的。和 /api/status 的 build 对不上就说明
+// Service Worker 还端着旧外壳，得主动让它去换（见 forceShellRefresh）。
+const SHELL_BUILD = "__BUILD__";
+// 注意：p 里可能已经有查询参数（例如 threads/read?id=xxx），
+// 这时候要用 & 拼口令，不能直接再补一个 ?，否则整个参数都会串味，服务端直接 403。
+const api = (p, o) => fetch('/api/' + p + (p.indexOf('?') >= 0 ? '&' : '?') + 'k=' + TOKEN,
+  Object.assign({ cache: 'no-store' }, o || {}));
+const apiPost = (p, b) => api(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b || {}) });
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// 通知正文里的链接要能直接点开：日报那种清单里全是论文地址，
+// 手机上复制粘贴太难受，点一下就进 App 内置浏览器。
+const linkify = (s) => String(s == null ? '' : s)
+  .split(/(https?:\/\/[^\s<>"'）】］》〉、，。；：！？…“”]+)/)
+  .map((p, i) => i % 2
+    ? '<a class="lnk" data-url="' + esc(p) + '">' + esc(p) + '</a>'
+    : esc(p))
+  .join('');
+const ico = (n, cls) => '<svg class="ic ' + (cls || '') + '"><use href="#i-' + n + '"/></svg>';
+const native = () => (window.CodexApp && window.CodexApp.info) ? window.CodexApp : null;
+
+// 把电脑当前的局域网入口交给原生存一份。
+// 手机和电脑在同一个 WiFi 下时，App 下次启动就能直连局域网、不绕公网隧道；
+// 而地址是路由器 DHCP 发的会变，所以每次刷新都交一次（原生那边自己会比对去重）。
+function pushLanUrls(list) {
+  try {
+    const n = native();
+    if (n && n.setLanUrls) n.setLanUrls(JSON.stringify(list || []));
+  } catch (_) {}
+}
+
+// 关键动作（发送、拍板）给一点触感反馈；在纯浏览器里没有这个桥，安静跳过。
+function buzz(ms) {
+  try { const n = native(); if (n && n.haptic) n.haptic(ms || 15); } catch (_) {}
+}
+
+// 人不在看（切后台/锁屏）时让原生补一条系统通知。
+// 审批和选择题都有超时，错过就按拒绝/放弃处理，所以这条不能省。
+function notifyHidden(title, body) {
+  const n = native();
+  if (n && n.notify) { try { n.notify(title, body); } catch (_) {} }
+}
+
+// 网页里的报错也送进手机端日志：在手机上出问题时，日志和截图一起传回电脑
+window.addEventListener('error', (e) => {
+  const n = native();
+  if (n && n.log) n.log('js-err', (e.message || '错误') + ' @ ' + (e.filename || '') + ':' + (e.lineno || 0));
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const n = native();
+  const r = e && e.reason;
+  if (n && n.log) n.log('js-err', '未处理的失败：' + ((r && r.message) ? r.message : String(r)));
+});
+
+// 外壳有新版时（sw.js 发现 index.html 变了会告诉我们）自动换一次，
+// 但绝不打断正在打字或者开着弹层的时候。每个会话只换一次。
+if ('serviceWorker' in navigator) {
+  // 新的外壳服务上线并接管时，换一次，让界面立刻是最新的
+  // （第一次安装时会触发一次 claim，那种不算，别刷新）
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
+    if (sessionStorage.getItem('shellReloaded') === '1') return;
+    if ($('sheet').classList.contains('on')) return;
+    sessionStorage.setItem('shellReloaded', '1');
+    location.reload();
+  });
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (!e.data || e.data.type !== 'shell-updated') return;
+    if (sessionStorage.getItem('shellReloaded') === '1') return;
+    if ($('sheet').classList.contains('on')) return;
+    if ($('input') && $('input').value.trim()) return;
+    sessionStorage.setItem('shellReloaded', '1');
+    location.reload();
+  });
+}
+
+let state = { sessions: [], services: [], active: null };
+let threads = [];          // 电脑上的对话（本地缓存 + 后台刷新）
+let openId = null;
+let running = false, stopped = false;
+// 哪些对话正在发送。以前只有一个全局的 running，一条对话在跑就把整个
+// 发送按钮锁住，于是"在另一条对话里发消息"会被自己挡住（服务端其实放行了）。
+const runningIds = new Set();
+function refreshRunning() { setRunning(!!(state.activeId && runningIds.has(state.activeId))); }
+// 电脑上正在跑的那一轮（{sessionId, threadId, startedAt}）。手机离开界面也照样跑，
+// 列表和对话详情靠它在对应那条上转圈圈。
+let runState = null;
+let runSig = '';
+
+/* ---------- 本地缓存：进页面立刻有内容，不空等 ---------- */
+const CACHE_KEY = 'codex.threads.v2';
+function readCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o || !Array.isArray(o.list)) return null;
+    return o;
+  } catch (_) { return null; }
+}
+function writeCache(list) {
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), list })); } catch (_) {}
+}
+function cachedThreads() {
+  const o = readCache();
+  return o ? o.list : [];
+}
+function cachedAt() {
+  const o = readCache();
+  return o ? o.at : 0;
+}
+
+/* 每条对话的内容也存一份在手机上，点进去先看到旧的，再刷新。
+   电脑上对话很长时不至于每次打开都空等一次网络往返。 */
+const MSG_PREFIX = 'codex.msgs.';
+function readMsgs(key) {
+  try {
+    const raw = localStorage.getItem(MSG_PREFIX + key);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    return o && Array.isArray(o.list) ? o.list : null;
+  } catch (_) { return null; }
+}
+function writeMsgs(key, list) {
+  try {
+    // 只留最后 120 条，别把 localStorage 撑爆
+    localStorage.setItem(MSG_PREFIX + key, JSON.stringify({ at: Date.now(), list: list.slice(-120) }));
+  } catch (_) {}
+}
+
+/* 上次停在哪一页、哪条对话 */
+const LAST_KEY = 'codex.last.v1';
+function readLast() {
+  try { return JSON.parse(localStorage.getItem(LAST_KEY) || 'null') || {}; } catch (_) { return {}; }
+}
+function writeLast(patch) {
+  try { localStorage.setItem(LAST_KEY, JSON.stringify(Object.assign(readLast(), patch))); } catch (_) {}
+}
+
+/* ---------- 通用 UI ---------- */
+let toastTimer = null;
+function toast(msg, ms) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('on'), ms || 2200);
+}
+function openSheet(html, mount) {
+  const s = $('sheet');
+  s.innerHTML = '<div class="grab"></div>' + html;
+  s.classList.add('on');
+  $('mask').classList.add('on');
+  if (mount) mount(s);
+}
+function closeSheet() {
+  $('sheet').classList.remove('on');
+  $('mask').classList.remove('on');
+}
+
+/* ---------- 正在生成的提示 ---------- */
+function runMatches(run, x) {
+  if (!run || !x) return false;
+  if (run.sessionId && x.id && run.sessionId === x.id) return true;
+  if (run.threadId && x.threadId && run.threadId === x.threadId) return true;
+  return false;
+}
+function runSigOf(run) { return run ? ((run.sessionId || '') + '|' + (run.threadId || '')) : ''; }
+
+/* ---------- 键盘：把这一页从底部收起来，别让系统整窗上移 ---------- */
+function watchKeyboard() {
+  const vv = window.visualViewport;
+  let baseH = 0;
+  const apply = () => {
+    const ime = window.__ime || 0;
+    const h = window.innerHeight;
+    // 键盘没弹出来时的高度就是基准
+    if (!ime) baseH = Math.max(baseH, h);
+    // 布局视口已经被键盘顶短了多少（App 自己收窄了 WebView，或系统缩了窗口）。
+    // 原生那条路走通了这里就是 0，不会重复让位。
+    const shrunk = Math.max(0, (baseH || h) - h);
+    const left = Math.max(0, ime - shrunk);
+    const root = document.documentElement.style;
+    root.setProperty('--kb', left + 'px');
+    root.setProperty('--kb-top', left + 'px');
+    // 键盘在的时候把标签栏收起来，输入框直接贴到键盘上沿
+    document.documentElement.classList.toggle('kb', (window.__ime || 0) > 0 || left > 0);
+  };
+  if (vv) {
+    vv.addEventListener('resize', apply);
+    vv.addEventListener('scroll', apply);
+  }
+  window.addEventListener('resize', apply);
+  apply();
+  // 键盘高度是原生注入的，变化时不一定有 resize 事件，顺手盯一下
+  let lastIme = -1;
+  setInterval(() => {
+    const ime = window.__ime || 0;
+    if (ime === lastIme) return;
+    lastIme = ime;
+    apply();
+    setTimeout(apply, 120);
+    setTimeout(apply, 360);
+  }, 250);
+}
+
+/* ---------- 实时信号：手机和电脑两端订阅同一条流 ----------
+
+   以前"正在生成"是各自轮询 /api/status 猜出来的（最慢要等 4 秒），
+   现在电脑端在跑的时候，手机这边（以及反过来）立刻就能看到：
+   转圈 + 已经跑了多少秒，跑完自动把内容读回来。 */
+let liveSrc = null, liveRunAt = 0, liveTick = null, liveAct = '';
+// 上一次"只凭历史里的 inProgress 认出来的在跑"去核对的时间（见 applyThreadRun）
+let lastRunVerifyAt = 0;
+// 别的对话：记各自读到哪一代了、上次什么时候读的，避免反复读
+let otherGen = {}, otherAt = {};
+// threadId -> true：正在跑的对话（不在前台的那些，列表上要看得见）
+let runThreads = {};
+// 服务端上一次回报的"每条对话最近动没动、在干什么"（/api/status 的 threads）。
+// 列表页的状态点、第三行都从这儿来。
+let statusThreads = {};
+// 电脑上读出来的"每条对话最近一轮结局"（Codex 自己的状态库，副屏同一份数据）
+let turnStatusById = {};
+// 服务端程序换了新版本（换了界面）就让页面自己重新加载一次。
+// 以前这一步得用户手动刷新，而对话页的下拉是"翻历史"，压根刷不了页面。
+let seenBuild = '';
+// 轻量校准（跟 DusuWorks/codex-webui 学的）：不指望事件一定送到，
+// 每秒问一次"我这条对话变了没"，变了就把内容读回来。
+// 断线、丢事件、切页面回来，都能自己补上。
+let seenThreadGen = 0, remoteRunning = false, remoteReloadAt = 0, remoteReloadTimer = null;
+// 服务端回报的"电脑端正在跑哪条对话"。手机上自己发的那一轮也会出现在这里，
+// 所以它同时也回答了"我刚才那条到底送到没有"。
+let deskRun = null;
+
+function remoteReload(force) {
+  const now = Date.now();
+  const wait = force ? 0 : Math.max(0, 1500 - (now - remoteReloadAt));
+  if (remoteReloadTimer) return;
+  // 正在边收边画的时候别重画历史：整块重建会把那条正在长的气泡从页面上摘掉，
+  // 后面的增量就写进一个不在页面上的节点里（看着就像"停了"）。
+  // 等这一轮结束（force）再整体对齐。
+  if (!force && remoteBubble) return;
+  remoteReloadTimer = setTimeout(() => {
+    remoteReloadTimer = null;
+    remoteReloadAt = Date.now();
+    if (openId) reloadOpenChat();
+  }, wait);
+}
+// 电脑那边发起的轮次：手机上边收边画，不用等整段写完才有东西看
+let remoteBubble = null, remoteBuf = '', remotePaint = false;
+let remotePaintAt = 0, remotePaintTimer = null;
+
+function paintRemote() {
+  if (remotePaint) return;
+  const wait = 80 - (Date.now() - remotePaintAt);
+  if (wait > 0) {
+    if (!remotePaintTimer) {
+      remotePaintTimer = setTimeout(() => { remotePaintTimer = null; paintRemote(); }, wait);
+    }
+    return;
+  }
+  remotePaint = true;
+  requestAnimationFrame(() => {
+    remotePaint = false;
+    remotePaintAt = Date.now();
+    if (remoteBubble) { remoteBubble.innerHTML = renderMarkdown(remoteBuf); scrollDown(); }
+  });
+}
+function openRemoteBubble() {
+  if (remoteBubble) return;
+  remoteBuf = '';
+  remoteBubble = addAssistant('', null);
+  remoteBubble.classList.add('caret');
+}
+function closeRemoteBubble() { remoteBubble = null; remoteBuf = ''; }
+
+// 时间说人话：47 秒 / 6 分 47 秒 / 1 小时 3 分
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + ' 秒';
+  const m = Math.floor(s / 60), rest = s % 60;
+  if (m < 60) return rest ? m + ' 分 ' + rest + ' 秒' : m + ' 分';
+  const h = Math.floor(m / 60);
+  return h + ' 小时 ' + (m % 60) + ' 分';
+}
+
+// 当前在做什么：正在思考 / 正在执行命令：xxx / 正在改文件 / 正在写回答
+function setLiveActivity(text) {
+  liveAct = text || '';
+  const el = document.querySelector('#genbar .gact');
+  if (el) el.textContent = liveAct;
+}
+
+function paintLive() {
+  const gt = document.querySelector('#genbar .gt');
+  if (gt) gt.textContent = '正在生成 · ' + fmtElapsed(Date.now() - (liveRunAt || Date.now()));
+}
+
+function openLive() {
+  if (liveSrc || !window.EventSource) return;
+  try {
+    liveSrc = new EventSource('/api/events?k=' + encodeURIComponent(TOKEN));
+  } catch (_) {
+    liveSrc = null;
+    return;
+  }
+  liveSrc.onmessage = (e) => {
+    let d = null;
+    try { d = JSON.parse(e.data); } catch (_) { return; }
+    onLive(d);
+  };
+  // 断了交给浏览器自己重连（EventSource 自带），这里不用管
+}
+
+function onLive(d) {
+  const mine = d.sessionId && openId && d.sessionId === openId;
+  // 自己正在发这一轮的时候，本地的流已经把事情讲清楚了（也有自己的动画），
+  // 就不用再按广播重来一遍，免得两边抢着画
+  // 例外：需要用户拍板的卡片（选择题 / 审批）必须放行，否则自己这一轮
+  // 里冒出来的问题就永远看不到。
+  if (running && mine && d.kind !== 'question' && d.kind !== 'approval') {
+    if (d.kind === 'done' || d.kind === 'error') runState = null;
+    return;
+  }
+  switch (d.kind) {
+    case 'question':
+      if (mine) {
+        renderQuestion(d.event || {});
+        if (document.hidden) {
+          const qs = (d.event && d.event.questions) || [];
+          notifyHidden('Codex 问你一件事', qs.map((q) => q.header).filter(Boolean).join('、') || '需要你选一下');
+        }
+      } else {
+        const qs = (d.event && d.event.questions) || [];
+        alertPending('Codex 问你一件事',
+          qs.map((q) => q.header).filter(Boolean).join('、') || '需要你选一下', d.sessionId);
+      }
+      break;
+    case 'approval':
+      if (mine) {
+        renderApproval(d.event || {});
+        if (document.hidden) {
+          const e = d.event || {};
+          notifyHidden('Codex 等你确认', e.title || e.detail || '需要你确认');
+        }
+      } else {
+        const e = d.event || {};
+        alertPending('Codex 等你确认', e.title || e.detail || '需要你确认', d.sessionId);
+      }
+      break;
+    case 'run':
+    case 'working':
+      runState = runState || { sessionId: d.sessionId, threadId: d.threadId, startedAt: d.at };
+      if (mine) { liveRunAt = Number(d.at) || Date.now(); liveTickStart(); openRemoteBubble(); }
+      if ($('p-chats').classList.contains('on')) renderChatsSoon();
+      break;
+    case 'delta':
+    case 'message':
+    case 'tool':
+    case 'reasoning':
+      if (mine) {
+        if (!remoteBubble) openRemoteBubble();
+        if (d.kind === 'delta' || d.kind === 'message') {
+          remoteBuf += (d.event && d.event.text) || '';
+          paintRemote();
+        }
+        if (d.kind === 'tool') setLiveActivity('正在执行：' + (d.event && d.event.text || ''));
+        else if (d.kind === 'reasoning') setLiveActivity('正在思考');
+        else if (d.kind === 'delta' || d.kind === 'message') setLiveActivity('正在写回答');
+        liveTickStart();
+      }
+      break;
+    case 'done':
+    case 'error':
+      if (mine) closeRemoteBubble();
+      // 顺手把这一轮的结局记进本地：列表页靠它显示"已完成/失败"
+      if (d.threadId) writeThreadStatus(d.threadId, d.kind === 'error' ? 'failed' : 'completed');
+      runState = null;
+      liveRunAt = 0;
+      hideGenerating();
+      refresh().then(() => {
+        renderChats();
+        if (mine && openId) reloadOpenChat();
+      }).catch(() => {});
+      break;
+  }
+}
+
+// 转圈那条提示上带秒表和"正在做什么"，跑多久一眼能看到，不会让人以为卡住了
+function liveTickStart() {
+  showGenerating();
+  paintLive();
+  if (liveTick) return;
+  liveTick = setInterval(() => {
+    if (!document.querySelector('#genbar .gt')) {
+      clearInterval(liveTick); liveTick = null;
+      $('chat-rundot').classList.remove('on');
+      return;
+    }
+    paintLive();
+  }, 1000);
+}
+
+/* ---------- 正在跑？每秒问一次很轻的接口 ---------- */
+// 让 Service Worker 立刻把新外壳取下来，取好了再刷新。
+//
+// 为什么需要它：外壳是"缓存优先"，手机上手快，但页面自己 reload 只会又拿到
+// 同一份缓存 —— 结果就是电脑上早就改好了，手机十一个小时都还看着老界面。
+// 加了"每份外壳只试一次"的闸：SW 万一取不到，这轮就不换，绝不反复刷新。
+function forceShellRefresh() {
+  const guard = 'shellRefreshFor';
+  try {
+    // 每个外壳只试一次：试过还换不上就停手，别和轮询组成"一直刷"的死循环
+    // （旧外壳的 SHELL_BUILD 不变，那个条件会一直被满足）。
+    if (sessionStorage.getItem(guard) === String(SHELL_BUILD)) return;
+    sessionStorage.setItem(guard, String(SHELL_BUILD));
+  } catch (_) {}
+  const sw = navigator.serviceWorker;
+  if (!sw || !sw.controller) { location.reload(); return; }
+  let done = false;
+  const go = () => { if (!done) { done = true; location.reload(); } };
+  sw.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'shell-refreshed') go();
+  }, { once: true });
+  try {
+    sw.controller.postMessage({ type: 'force-shell-refresh' });
+  } catch (_) {
+    go();
+    return;
+  }
+  setTimeout(go, 3000);   // 兜底：SW 没回话也别一直等
+}
+
+async function pollStatus() {
+  try {
+    const r = await api('status');
+    if (!r.ok) { netFail(); return; }
+    const d = await r.json();
+    netOK();
+    if (d.build) {
+      if (!seenBuild) seenBuild = d.build;
+      // 手上这份外壳和电脑上的对不上（SW 是缓存优先，冷启动的第一次轮询就会
+      // 拿到旧外壳）。不管这是第几次轮询都得让 SW 去换新外壳——尤其"第一次
+      // 轮询就看到 build 已经是新的"这种，老写法会漏掉，手机就一直看着旧界面。
+      if (SHELL_BUILD && SHELL_BUILD !== d.build) { forceShellRefresh(); return; }
+      if (seenBuild !== d.build) { location.reload(); return; }
+    }
+    // 我打开的那条对话：内容变了就重读，正在跑就把"正在生成"挂上
+    const curTid = (state.active || {}).threadId;
+    statusThreads = d.threads || {};
+    turnStatusById = d.turnStatus || {};
+    // 正在等用户拍板的请求：不指望那一次推送（页面切后台就错过了），
+    // 每次轮询都捡一遍。当前这条对话直接把卡片画出来，别的对话至少提醒一声。
+    (d.approvals || []).forEach((a) => {
+      if (a.sessionId && a.sessionId === openId) {
+        if (!$('log').querySelector('[data-approval="' + a.id + '"]')) {
+          renderApproval({ approvalId: a.id, kind: a.kind, title: a.title, detail: a.detail, text: a.text });
+        }
+      } else {
+        alertPending('Codex 等你确认', a.title || a.detail || '需要你确认', a.sessionId);
+      }
+    });
+    const info = (curTid && d.threads) ? d.threads[curTid] : null;
+    if (info) {
+      if (info.n !== seenThreadGen) {
+        seenThreadGen = info.n;
+        if (!running) remoteReload(info.run);   // 跑着的过程中限速重读
+      }
+      if (info.run && !remoteRunning && !running) {
+        liveRunAt = Number(info.at) || Date.now();
+        liveTickStart();
+      }
+      if (!info.run && remoteRunning) {
+        remoteReload(true);                 // 跑完了补最后一遍
+        if (liveRunAt) noteElapsed(liveRunAt);
+      }
+      remoteRunning = !!info.run;
+    }
+    // 别的对话在跑 / 有更新：悄悄把它们的内容读进缓存，切回去就已经是最新的；
+    // 顺手记下哪几条在跑，列表上要给它们转圈。
+    const runningNow = {};
+    if (d.desk && d.desk.threadId) runningNow[d.desk.threadId] = true;
+    Object.keys(d.threads || {}).forEach((tid) => {
+      if (!tid) return;
+      const inf = d.threads[tid];
+      if (inf.run) runningNow[tid] = true;
+      if (tid === curTid) return;                    // 正在看的这条走上面的逻辑
+      if (inf.n === (otherGen[tid] || 0) && !inf.run) return;
+      if (Date.now() - (otherAt[tid] || 0) < 8000) return;   // 每条最多 8 秒读一次
+      otherGen[tid] = inf.n;
+      otherAt[tid] = Date.now();
+      api('threads/read?id=' + encodeURIComponent(tid)).then((r) => (r.ok ? r.json() : null))
+        .then((dd) => {
+          if (!dd || !dd.messages || !dd.messages.length) return;
+          writeMsgs('t-' + tid, dd.messages);       // 存着：切过去立刻就是新的
+        }).catch(() => {});
+    });
+    const runSetChanged = JSON.stringify(runningNow) !== JSON.stringify(runThreads);
+    runThreads = runningNow;
+    if (runSetChanged && $('p-chats').classList.contains('on')) renderChatsSoon();
+    // 电脑那边派下来的调试活（抓图 / 传日志）搭这趟车，省一轮往返
+    if (d.phoneCmd) runPhoneCmd(d.phoneCmd);
+    const prev = runSig;
+    runState = d.running || null;
+    runSig = runSigOf(runState);
+    const cur = state.active || {};
+    // 电脑端那条单独看：手机自己在别的对话上跑一轮时，这条也不能看不见
+    const desk = d.desk || null;
+    deskRun = desk;
+    const deskHere = !!(desk && runMatches(desk, cur));
+    if (deskHere) liveRunAt = Number(desk.startedAt) || liveRunAt || Date.now();
+    // 只要"我正在看的这条对话在跑"就把提示条一直挂着，不管是手机发的还是电脑端发的。
+    //
+    // 以前这里把 `running`（手机自己发起的这一轮）排除掉了，以为本地流自己会画提示条——
+    // 可本地流只在有事件时才补挂，而轮询每 4 秒就会收走一次：表现就是
+    // "正在生成 · N 秒"和扫光动画一闪一闪，跑的久一点（比如卡在一段命令上）就整个不见了。
+    if (remoteRunning || deskHere || (runState && runMatches(runState, cur))) showGenerating();
+    else hideGenerating();
+    // 提示条亮着、但这几分钟一条新消息都没有：拿线程自己的状态核一遍。
+    // 长命令跑着的时候本来就安静，别误判成"还在跑"；真结束了的轮次也能立刻收起来。
+    // 一分钟最多核一次，成本就是一次读历史。
+    const quiet = !info || (Date.now() - Number(info.at || 0) > 180000);
+    if ((remoteRunning || deskHere) && !running && quiet && Date.now() - lastRunVerifyAt > 60000) {
+      lastRunVerifyAt = Date.now();
+      reloadOpenChat();
+    }
+    // 这一轮跑完了：把电脑上最新的内容读回来
+    if (prev && !runState && openId) reloadOpenChat();
+    if (runSig !== prev && $('p-chats').classList.contains('on')) renderChatsSoon();
+  } catch (_) { netFail(); }
+}
+
+// 连续几次问不到电脑就把提示挂出来。以前这里是静默的，
+// 手机上看起来一切正常，实际早就断了 —— 我排查时就是被这个骗了。
+let netFails = 0;
+function netFail() {
+  netFails++;
+  if (netFails < 4) return;
+  const el = $('offbar');
+  if (!el) return;
+  const txt = $('offtext');
+  if (txt) txt.textContent = netFails < 20 ? '连不上电脑，正在重试' : '连不上电脑（已试 ' + netFails + ' 次），检查电脑端服务或网络';
+  el.classList.add('on');
+}
+function netOK() {
+  if (!netFails) {
+    // 就算没挂过"断网"条，也可能刚从一个请求级失败里缓过来，顺手试着补发
+    if (outbox.length) flushOutbox();
+    return;
+  }
+  netFails = 0;
+  const el = $('offbar');
+  if (el) el.classList.remove('on');
+  if (outbox.length) flushOutbox();
+}
+
+// 列表别一有风吹草动就整个重画：合并到 400ms 一次
+let chatsSoon = null;
+function renderChatsSoon() {
+  if (chatsSoon) return;
+  chatsSoon = setTimeout(() => { chatsSoon = null; renderChats(); }, 400);
+}
+
+// 正在生成时挂一条提示。它挂在 #genhost（输入框上方），不进 #log ——
+// 消息列表每次重画都会整块清空，挂里面就会被抹掉。
+function showGenerating() {
+  if (!$('chat').classList.contains('on')) return;
+  // 已经挂着也要把秒表和"正在做什么"刷一下：万一定时器那一路断过，轮询还能把它续上
+  if ($('genbar')) { $('chat-rundot').classList.add('on'); setLiveActivity(liveAct); paintLive(); return; }
+  const d = document.createElement('div');
+  d.id = 'genbar';
+  d.className = 'genbar';
+  d.innerHTML =
+    '<div class="gline">' + ico('circle-notch', 'gen-ic') +
+      '<span class="gt">正在生成</span></div>' +
+    '<div class="gact"></div>' +
+    '<div class="sweep"><i></i></div>';
+  $('genhost').appendChild(d);
+  $('chat-rundot').classList.add('on');
+  setLiveActivity(liveAct);
+  paintLive();
+}
+function hideGenerating() {
+  const d = $('genbar');
+  if (d) d.remove();
+  $('chat-rundot').classList.remove('on');
+}
+
+// 手机离开这条对话之后那一轮才跑完：回来时把电脑上最新的内容读回来补上。
+async function reloadOpenChat() {
+  const s = state.active || {};
+  if (!openId) return;
+  // 状态和历史这两趟互不依赖：一起发，别串着等（一趟就是 363ms）
+  const tid = s.threadId || '';
+  const histP = tid ? readThread(tid) : null;
+  await refresh();
+  const cur = state.active || {};
+  if (!openId || !cur.threadId) return;
+  try {
+    const d = (histP && cur.threadId === tid) ? await histP : await readThread(cur.threadId);
+    if (!d) return;
+    const remote = d.messages || [];
+    paintContinue(d.lastStatus);
+    applyThreadRun(d.lastStatus);
+    writeThreadStatus(cur.threadId, d.lastStatus);   // 列表页照它显示"已完成/失败/已中断"
+    if (!remote.length || !openId) return;
+    writeMsgs('t-' + cur.threadId, remote);
+    renderHistory(remote);
+    $('chat-title').textContent = chatTitle(cur);
+  } catch (_) {}
+}
+
+$('mask').addEventListener('click', closeSheet);
+
+/* 选项列表：比系统自带的 select 更贴合这套界面，点一下就选中 */
+const CHOICES = {
+  sandbox: [
+    ['read-only', '只读', '只能看，改不了文件'],
+    ['workspace-write', '可改工作目录', '默认，最常用'],
+    ['danger-full-access', '完全放开', '整台电脑都能改，慎用'],
+  ],
+  approval: [
+    ['on-request', '需要时问我', '要越界操作时才弹卡片'],
+    ['untrusted', '多数动作都问我', '更严格，适合生疏的任务'],
+    ['never', '从不问我', '一路跑到底，不打断'],
+  ],
+};
+function choiceRows(id, key, cur) {
+  return '<div class="opts" id="' + id + '">' + CHOICES[key].map(([v, t, d]) =>
+    '<button class="opt' + (v === cur ? ' on' : '') + '" data-v="' + v + '">' +
+    '<span class="bd"><span class="t1">' + esc(t) + '</span>' +
+    (d ? '<span class="t2">' + esc(d) + '</span>' : '') + '</span>' +
+    '<span class="tick">' + ico('check-circle', 'sm') + '</span></button>').join('') + '</div>';
+}
+function bindChoices(root) {
+  (root || document).querySelectorAll('.opts').forEach((box) => {
+    if (box.dataset.bound) return;
+    box.dataset.bound = '1';
+    box.querySelectorAll('.opt').forEach((el) => el.addEventListener('click', () => {
+      box.querySelectorAll('.opt').forEach((x) => x.classList.toggle('on', x === el));
+    }));
+  });
+}
+function choiceVal(id) {
+  const box = $(id);
+  const el = box ? box.querySelector('.opt.on') : null;
+  return el ? el.dataset.v : '';
+}
+
+function hhmm(ts) {
+  if (!ts) return '';
+  const d = new Date(ts < 1e12 ? ts * 1000 : ts);
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+}
+
+/* ---------- Markdown ---------- */
+/* Markdown 表格 -> 真表格。
+   模型给的对比表常有四五列，在手机上按原样排会挤成一团、连列都分不清，
+   所以这儿只负责认出表格并吐出 <table>，怎么摆交给 CSS（横向滑动 + 首列钉住）。
+   在 esc() 之后调用：单元格内容已经转义过，插进去的只有我们自己生成的标签。 */
+const mdHasPipe = (s) => /\|/.test(s) && /^\s*\|?.+\|?\s*$/.test(s);
+function mdCells(line) {
+  let s = String(line).trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map((c) => c.replace(/\\\|/g, '|').trim());
+}
+function mdIsSep(line) {
+  const cells = mdCells(line);
+  if (cells.length < 2) return false;          // 单列的 --- 是分隔线，不是表格
+  return cells.every((c) => /^:?-{1,}:?$/.test(c));
+}
+function mdTables(text) {
+  const lines = String(text).split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!mdHasPipe(lines[i]) || !(i + 1 < lines.length) || !mdIsSep(lines[i + 1])) {
+      out.push(lines[i]);
+      continue;
+    }
+    const head = mdCells(lines[i]);
+    const align = mdCells(lines[i + 1]).map((c) =>
+      c.startsWith(':') && c.endsWith(':') ? 'c' : c.endsWith(':') ? 'r' : c.startsWith(':') ? 'l' : '');
+    const body = [];
+    let j = i + 2;
+    for (; j < lines.length; j++) {
+      if (!mdHasPipe(lines[j]) || mdIsSep(lines[j])) break;   // 空行、分隔线、普通段落都收尾
+      body.push(mdCells(lines[j]));
+    }
+    const cols = Math.max(head.length, ...body.map((r) => r.length));
+    while (head.length < cols) head.push('');
+    const cls = (k) => (align[k] ? ' class="ta-' + align[k] + '"' : '');
+    let html = '<div class="tw"><table><thead><tr>';
+    head.forEach((c, k) => { html += '<th' + cls(k) + '>' + c + '</th>'; });
+    html += '</tr></thead><tbody>';
+    body.forEach((row) => {
+      html += '<tr>';
+      for (let k = 0; k < cols; k++) html += '<td' + cls(k) + '>' + (row[k] == null ? '' : row[k]) + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+    out.push(html);
+    i = j - 1;
+  }
+  return out.join('\n');
+}
+/* 本机图片路径 -> 能喂给 <img> 的地址。
+   手机碰不到这台机器的盘，图本身得让电脑读出来（/api/fs/image）；
+   外链（http/https）和已经是接口地址的原样返回。 */
+function toImgSrc(src, full) {
+  const s = String(src || '').trim();
+  if (!s) return s;
+  if (/^https?:\/\//i.test(s) || s.startsWith('/api/')) return s;
+  if (!/^[A-Za-z]:[\\/]/.test(s) && !s.startsWith('/')) return s;
+  if (!/\.(png|jpe?g|gif|webp|bmp)$/i.test(s)) return s;
+  const base = '/api/fs/image?path=' + encodeURIComponent(s) + '&k=' + TOKEN;
+  // 不带 w 是缩略图（服务端默认缩到 1200 宽），w=0 才是原图
+  return full ? (base + '&w=0') : base;
+}
+
+function renderMarkdown(src) {
+  const blocks = [];
+  let text = String(src || '').replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)```/g, (m, lang, code) => {
+    blocks.push(code.replace(/\n$/, ''));
+    return '\u0000B' + (blocks.length - 1) + '\u0000';
+  });
+  // Markdown 图片：先占位再还原（还原在函数尾），点一下全屏看
+  const imgs = [];
+  text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (m, alt, src2) => {
+    imgs.push({ alt: alt, src: src2 });
+    return '\u0000I' + (imgs.length - 1) + '\u0000';
+  });
+  // Codex 经常在正文里直接甩一条图片的绝对路径（不是 Markdown 语法），
+  // 手机上那就是一串看不懂也点不开的字。连它一起认出来，跟 Markdown 图片
+  // 走同一套渲染：直接显示，点一下全屏。
+  text = text.replace(
+    // Unix 那种绝对路径写成 \/(?!\/)，是为了避开 https:// 里那两个斜杠 ——
+    // 否则 "https://x/a.png" 会被当成以 / 开头的本机路径。
+    /(^|[\s(（【>、，。:：])((?:[A-Za-z]:[\\/]|\/(?!\/))[^\s<>"'`|）】]*?\.(?:png|jpe?g|gif|webp|bmp))/gi,
+    (m, pre, p) => { imgs.push({ alt: '', src: p }); return pre + '\u0000I' + (imgs.length - 1) + '\u0000'; }
+  );
+  text = esc(text);
+  text = text.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/^###\s?(.*)$/gm, '<h3>$1</h3>');
+  text = text.replace(/^##?\s?(.*)$/gm, '<h2>$1</h2>');
+  text = mdTables(text);
+  text = text.replace(/\n/g, '<br>');
+  text = text.replace(/\u0000B(\d+)\u0000/g, (m, i) =>
+    '<pre><button class="copybtn" data-copy="' + i + '">复制</button><code>' + esc(blocks[+i]) + '</code></pre>');
+  text = text.replace(/\u0000I(\d+)\u0000/g, (m, i) => {
+    const im = imgs[+i];
+    if (!im) return m;
+    return '<img class="mdimg" src="' + esc(toImgSrc(im.src)) + '"' +
+      ' data-full="' + esc(toImgSrc(im.src, true)) + '"' +
+      ' alt="' + esc(im.alt) + '" loading="lazy">';
+  });
+  return text;
+}
+function attachCopy(root) {
+  root.querySelectorAll('.copybtn').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => {
+      const code = btn.closest('pre').querySelector('code');
+      const done = () => { const o = btn.textContent; btn.textContent = '已复制'; setTimeout(() => (btn.textContent = o), 1200); };
+      if (navigator.clipboard) navigator.clipboard.writeText(code.textContent).then(done).catch(done);
+      else done();
+    });
+  });
+}
+
+/* ---------- 导航 ---------- */
+let curTab = 'chats';
+function switchTab(name) {
+  curTab = name;
+  document.querySelectorAll('.page').forEach((p) => p.classList.toggle('on', p.id === 'p-' + name));
+  document.querySelectorAll('nav button').forEach((b) => b.classList.toggle('on', b.dataset.tab === name));
+  writeLast({ tab: name });
+  if (name !== 'chats') closeDrawer();
+  if (name === 'services') renderServices();
+  if (name === 'me') renderMe();
+  if (name === 'chats') { renderChats(); ensureChatOpen(); }
+  if (name === 'feed') { renderFeed(); loadFeed(false); }
+  feedTimer(name === 'feed');
+}
+document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+/* ---------- 左上角那个「全部对话」抽屉 ---------- */
+// 列表页现在就是主屏，抽屉退休了。留两个空函数是为了不惊动下面的调用点
+// （openChat / __back / 远程动作里都还在叫它们，行为上等于什么都不做）。
+function openDrawer() {}
+function closeDrawer() {}
+function setChatVisible(on) {
+  $('chat').classList.toggle('on', on);
+  $('chat-menu').classList.toggle('off', !on);
+  // 对话页占满整屏：列表收起来、底部标签栏收起
+  $('p-chats').classList.toggle('chat-open', on);
+  document.body.classList.toggle('inchat', on);
+  if (!on) {
+    $('chat-title').textContent = '对话';
+    $('chat-path').textContent = '';
+  }
+}
+// 切到「对话」页：列表就是主屏，不再自动打开上次那条
+function ensureChatOpen() {
+  setChatVisible(false);
+  renderChats();
+  loadThreads(false);
+}
+
+/* 系统返回键：先关弹层和抽屉，再回「对话」页；已经在对话里就退出 App
+   （对话不会丢，下次打开还是这一条）。 */
+window.__back = function () {
+  try {
+    // 图片预览浮在最上层，先关它
+    if ($('imgview').classList.contains('on')) { closeImgViewer(); return true; }
+    if ($('sheet').classList.contains('on')) { closeSheet(); return true; }
+    if ($('sysmon').classList.contains('on')) { closeMon(); return true; }
+    // 在对话里：返回键先回列表（列表才是主屏），再按一次才轮到切标签/退出
+    if ($('chat').classList.contains('on')) { closeChat(); return true; }
+    if (curTab !== 'chats') { switchTab('chats'); return true; }
+  } catch (_) {}
+  return false;
+};
+
+let feedPoll = null;
+function feedTimer(on) {
+  // 通知缓存一份 35 KB：以前十秒问一次，公网一趟就是 0.4 秒起步。
+  // 30 秒一次够用，切前台和下拉刷新还会各自补一次。
+  if (on && !feedPoll) feedPoll = setInterval(() => { if (!document.hidden) loadFeed(false); }, 30000);
+  if (!on && feedPoll) { clearInterval(feedPoll); feedPoll = null; }
+}
+
+/* ---------- 对话列表 ---------- */
+function skeleton(rows) {
+  let h = '<div class="group"><div class="skeleton">';
+  for (let i = 0; i < (rows || 5); i++) {
+    h += '<div class="sk-row"><div class="sk round"></div><div style="flex:1"><div class="sk line1"></div><div class="sk line2"></div></div></div>';
+  }
+  return h + '</div></div>';
+}
+
+let importing = false;      // 正在从电脑拉对话列表
+let importedAt = 0;         // 上次拉完的时间
+function renderImport() {
+  const box = $('chats-imp');
+  if (!box) return;
+  if (importing) {
+    box.className = 'imp';
+    box.innerHTML = '<div class="bar"><i></i></div><div class="txt">' +
+      ico('circle-notch', 'sm') + '<span>正在导入电脑上的对话</span></div>';
+    return;
+  }
+  if (!importedAt) { box.className = 'imp done'; box.innerHTML = ''; return; }
+  const n = threads.length;
+  box.className = 'imp done';
+  box.innerHTML = '<div class="txt">' + ico('check-circle', 'sm') +
+    '<span>已同步 ' + n + ' 条 · ' + hhmm(importedAt) + '</span></div>';
+}
+
+// 全部对话：搜索关键字 + 折叠了哪些分组（折叠状态记在本地）
+let chatQuery = '';
+// 全部对话的两种视图：list=按时间一列（默认），group=按项目分组
+// 默认给了时间序：找"上次聊到哪"时，一列按时间排下来比按项目翻快。
+// key 一起升到 v2，之前存过 'group' 的也会用上新默认。
+let chatView = 'list';
+try { chatView = localStorage.getItem('codex.view.v2') || 'list'; } catch (_) {}
+const collapsedProjects = new Set((() => {
+  try { return JSON.parse(localStorage.getItem('codex.folded.v1') || '[]'); } catch (_) { return []; }
+})());
+function saveCollapsed() {
+  try { localStorage.setItem('codex.folded.v1', JSON.stringify([...collapsedProjects])); } catch (_) {}
+}
+function bindChatSearch() {
+  const el = $('chat-search');
+  if (!el || el.dataset.bound) return;
+  el.dataset.bound = '1';
+  el.addEventListener('input', () => {
+    chatQuery = el.value;
+    renderChats();
+  });
+}
+
+// 顶部"全部对话 ▼"：切换 列表视图 / 分组视图（形态照 Kimi 那个下拉）
+function bindViewSwitch() {
+  const btn = $('view-switch');
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', () => {
+    const mark = (v) => (chatView === v ? ' ✓' : '');
+    openSheet('<h3>显示方式</h3><div class="sheetbox">' +
+      '<button class="row" data-v="list"><span class="bd"><span class="t1">列表视图' + mark('list') + '</span>' +
+      '<span class="t2">按时间从新到旧，一列排下来</span></span></button>' +
+      '<button class="row" data-v="group"><span class="bd"><span class="t1">分组视图' + mark('group') + '</span>' +
+      '<span class="t2">按项目分组，可以折叠</span></span></button>' +
+      '</div>', (sheetEl) => {
+      sheetEl.querySelectorAll('.row').forEach((el) => {
+        el.addEventListener('click', () => {
+          chatView = el.dataset.v;
+          try { localStorage.setItem('codex.view.v2', chatView); } catch (_) {}
+          closeSheet();
+          renderChats();
+        });
+      });
+    });
+  });
+}
+
+/* ---------- 一条对话现在是什么状态（照副屏 MMM-CodexStatus 那套） ----------
+   在跑：绿点「运行中」；还挂着但 10 分钟没动静：琥珀「未收尾」（副屏同一个阈值）；
+   最近一轮的结局（完成/失败/中断）在打开那条对话时记下来，列表直接复用。 */
+const THREAD_STATE_LABEL = {
+  run: '运行中', stall: '未收尾', bad: '失败', stop: '已中断', done: '已完成', idle: '',
+};
+const STALL_MS = 10 * 60 * 1000;
+
+function readThreadStatus() {
+  try { return JSON.parse(localStorage.getItem('codex.tstatus.v1') || '{}'); } catch (_) { return {}; }
+}
+function writeThreadStatus(tid, status) {
+  if (!tid || !status) return;
+  try {
+    const m = readThreadStatus();
+    m[tid] = { s: String(status), at: Date.now() };
+    localStorage.setItem('codex.tstatus.v1', JSON.stringify(m));
+  } catch (_) {}
+}
+// 服务端给的"上一轮结局" → 列表上那几种状态
+function mapTurnStatus(s) {
+  switch (String(s || '')) {
+    case 'failed': return 'bad';
+    case 'interrupted': return 'stop';
+    case 'completed': return 'done';
+    default: return '';
+  }
+}
+function agoText(ms) {
+  const d = Math.max(0, Number(ms) || 0);
+  if (d < 45000) return '刚刚';
+  const m = Math.floor(d / 60000);
+  if (m < 60) return m + ' 分钟前';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' 小时前';
+  return Math.floor(h / 24) + ' 天前';
+}
+
+// 这条对话现在的状态，外加"它此刻在干什么"那一行
+function chatState(it) {
+  const tid = it.threadId || '';
+  const info = (tid && statusThreads[tid]) ? statusThreads[tid] : null;
+  const busy = runMatches(runState, { id: it.sessionId, threadId: tid }) || !!(tid && runThreads[tid]);
+  if (busy) {
+    const at = info ? Number(info.at) || 0 : 0;
+    const quiet = at ? Date.now() - at : 0;
+    const stalled = quiet > STALL_MS;
+    let started = 0;
+    if (runState && runMatches(runState, { id: it.sessionId, threadId: tid })) {
+      started = Number(runState.startedAt) || 0;
+    }
+    if (!started) started = at;
+    return {
+      key: stalled ? 'stall' : 'run',
+      label: THREAD_STATE_LABEL[stalled ? 'stall' : 'run'],
+      act: (info && info.act) || (stalled ? '超过 ' + Math.round(quiet / 60000) + ' 分钟没动静' : ''),
+      started: started, at: at,
+    };
+  }
+  // 电脑上读到的"最近一轮结局"最准（跟副屏同一份数据）；
+  // 读不到就退回手机自己记的那份（打开过这条对话时存下来的）。
+  const srv = (tid && turnStatusById[tid]) || null;
+  if (srv && srv.status === 'inProgress') {
+    // 库里写着还在跑、而我们这边没收到"在跑"的信号（比如电脑端自己跑的看丢了）：
+    // 按"多久没动静"判运行中还是未收尾，跟上面同一套规则
+    const started = Number(srv.startedAt) || 0;
+    const quiet = (info && Number(info.at)) ? Date.now() - Number(info.at)
+      : (started ? Date.now() - started : 0);
+    const stalled = quiet > STALL_MS;
+    return {
+      key: stalled ? 'stall' : 'run',
+      label: THREAD_STATE_LABEL[stalled ? 'stall' : 'run'],
+      act: (info && info.act) || (stalled ? '超过 ' + Math.round(quiet / 60000) + ' 分钟没动静' : ''),
+      started: started, at: (info && Number(info.at)) || 0, duration: 0,
+    };
+  }
+  const cached = tid ? (readThreadStatus()[tid] || null) : null;
+  const key = (srv && mapTurnStatus(srv.status)) || (cached && mapTurnStatus(cached.s)) || 'idle';
+  const at = (srv && Number(srv.completedAt)) || (cached && Number(cached.at)) || (info && Number(info.at)) || 0;
+  return {
+    key: key, label: THREAD_STATE_LABEL[key] || '', act: '', started: 0, at: at,
+    duration: (srv && Number(srv.durationMs)) || 0,
+  };
+}
+
+function renderChats() {
+  const box = $('chats-body');
+  bindChatSearch();
+  bindViewSwitch();
+  const pcThreads = threads.length ? threads : cachedThreads();
+  const byThread = new Map();
+  pcThreads.forEach((t) => byThread.set(t.id, t));
+
+  // 搜索：按标题 / 项目名过滤（本地过滤，打字即筛，不用等网络）
+  const q = (chatQuery || '').trim().toLowerCase();
+  const hit = (s) => !q || s.toLowerCase().includes(q);
+
+  // 一条对话只出现一次：本地接管过的用本地那条（能直接发消息），
+  // 电脑上还没接管的用电脑那条（点了才接管）。
+  const usedThreads = new Set();
+  const items = [];
+  // 同一条电脑对话可能被接管过两次（旧版本留下的），只画一条：
+  // 优先当前选中的那条，其次更新时间新的。
+  const sessions = (state.sessions || []).slice().sort((a, b) => {
+    const aa = a.id === state.activeId ? 1 : 0;
+    const bb = b.id === state.activeId ? 1 : 0;
+    return (bb - aa) || ((b.updatedAt || 0) - (a.updatedAt || 0));
+  });
+  const seenLocal = new Set();
+  sessions.forEach((s) => {
+    if (s.threadId && seenLocal.has(s.threadId)) return;
+    if (s.threadId) seenLocal.add(s.threadId);
+    const t = s.threadId ? byThread.get(s.threadId) : null;
+    if (s.threadId) usedThreads.add(s.threadId);
+    items.push({
+      key: 'local:' + s.id, icon: 'chat-circle-dots',
+      title: (t && (t.name || t.preview)) || s.title || '新对话',
+      project: dirLabel(s, t),
+      // "上次聊到什么时候"取两边的新值：手机这边发过消息、电脑那边打开过，
+      // 都算一次活动。只认一边会把刚聊过的对话排到后面去。
+      ts: Math.max((t && t.updatedAt) || 0, s.updatedAt || 0), active: s.id === state.activeId,
+      threadId: s.threadId || '', sessionId: s.id,
+    });
+  });
+  pcThreads.forEach((t) => {
+    if (usedThreads.has(t.id)) return;
+    items.push({
+      key: 'thread:' + t.id, icon: 'desktop',
+      title: t.name || t.preview || '未命名对话', project: dirLabel(null, t),
+      ts: t.updatedAt, active: false, threadId: t.id, sessionId: '',
+    });
+  });
+  items.forEach((it) => { it._t = byThread.get(it.threadId) || null; });
+  // 搜索命中：标题或项目名里含关键字。搜索时全部展开，不折叠挡路。
+  const shown = q ? items.filter((it) => hit(it.title || '') || hit(it.project || '')) : items;
+
+  // 顶部三个汇总（照副屏那排 chip）：在跑 / 未收尾 / 已完成
+  const sums = { run: 0, stall: 0, done: 0 };
+  shown.forEach((it) => { const k = chatState(it).key; if (sums[k] !== undefined) sums[k]++; });
+  const sumBox = $('chats-sum');
+  if (sumBox) {
+    sumBox.innerHTML =
+      (sums.run ? '<span class="chip run">运行 ' + sums.run + '</span>' : '') +
+      (sums.stall ? '<span class="chip stall">未收尾 ' + sums.stall + '</span>' : '') +
+      (sums.done ? '<span class="chip done">已完成 ' + sums.done + '</span>' : '') +
+      (!sums.run && !sums.stall && !sums.done ? '<span class="chip">没有正在跑的</span>' : '');
+  }
+
+  if (!shown.length) {
+    $('chats-body').innerHTML = importing ? '' : '<div class="group"><div class="empty">' +
+      ico(q ? 'magnifying-glass' : 'chat-circle-dots') +
+      '<div class="e1">' + (q ? '没找到匹配的对话' : '还没有对话') + '</div>' +
+      '<div class="e2">' + (q ? '换个词试试' : '点右上角的加号，选个项目开始') + '</div></div></div>';
+    return;
+  }
+
+  const byProject = new Map();
+  shown.forEach((it) => {
+    if (!byProject.has(it.project)) byProject.set(it.project, []);
+    byProject.get(it.project).push(it);
+  });
+  const projects = [...byProject.entries()].sort((a, b) => {
+    const at = Math.max(...a[1].map((x) => x.ts || 0));
+    const bt = Math.max(...b[1].map((x) => x.ts || 0));
+    return bt - at;
+  });
+
+  // 一行长什么样（照副屏 MMM-CodexStatus 那套）：
+  //   ● 标题 ……………………  运行中
+  //     Codex手机端 · 已跑 2分31秒
+  //     ▸ npm run build
+  const rowHtml = (it) => {
+    const st = chatState(it);
+    const meta = [shortPath(it.project)];
+    if (st.key === 'run' || st.key === 'stall') {
+      meta.push('已跑 ' + fmtElapsed(Date.now() - (st.started || Date.now())));
+    } else {
+      if (st.duration) meta.push('耗时 ' + fmtElapsed(st.duration));
+      if (st.at) meta.push(agoText(Date.now() - st.at));
+      else meta.push(hhmm(it.ts));
+    }
+    return '<button class="citem ' + st.key + (it.active ? ' on' : '') + '" data-key="' + esc(it.key) + '">' +
+      '<span class="cdot"></span>' +
+      '<span class="cbody">' +
+        '<span class="crow"><span class="ctitle">' + esc(it.title) + '</span>' +
+        (st.label ? '<span class="cstat">' + esc(st.label) + '</span>' : '') + '</span>' +
+        '<span class="cmeta">' + esc(meta.filter(Boolean).join(' · ')) + '</span>' +
+        (st.act ? '<span class="cact">' + esc(st.act) + '</span>' : '') +
+      '</span></button>';
+  };
+
+  let h = '';
+  if (chatView === 'list') {
+    // 列表视图：不分组，按时间从新到旧一列排下来
+    h += '<div class="group"><div class="clist">';
+    shown.slice().sort((a, b) => (b.ts || 0) - (a.ts || 0)).forEach((it) => { h += rowHtml(it); });
+    h += '</div></div>';
+  } else {
+  projects.forEach(([proj, list]) => {
+    list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const name = shortPath(proj);
+    const folded = !q && collapsedProjects.has(proj);
+    h += '<div class="group"><div class="grouphead ' + (folded ? 'fold' : 'open') +
+      '" data-proj="' + esc(proj) + '">' +
+      ico('caret-right', 'cv') + esc(name) +
+      '<span class="n">' + list.length + '</span></div>' +
+      '<div class="clist"' + (folded ? ' style="display:none"' : '') + '>';
+    list.forEach((it) => { h += rowHtml(it); });
+    h += '</div></div>';
+  });
+  }
+  box.innerHTML = h;
+  // 分组折叠：点分组标题收起/展开，状态记在本地（下次打开还是这样）
+  box.querySelectorAll('.grouphead').forEach((gh) => {
+    gh.addEventListener('click', () => {
+      const proj = gh.dataset.proj || '';
+      if (collapsedProjects.has(proj)) collapsedProjects.delete(proj);
+      else collapsedProjects.add(proj);
+      saveCollapsed();
+      renderChats();
+    });
+  });
+  const bindRow = (el) => {
+    el.addEventListener('click', () => {
+      closeDrawer();
+      const [kind, id] = el.dataset.key.split(':');
+      const local = kind === 'local' ? ((state.sessions || []).find((x) => x.id === id) || {}) : null;
+      if (local) {
+        // 接管时用的是占位名，知道真名就顺手改过来（attach 是幂等的，不会重复建会话）
+        const t = local.threadId ? byThread.get(local.threadId) : null;
+        if (t && (!local.title || local.title === '电脑上的对话')) {
+          attachThread(local.threadId, { name: t.name || t.preview || '', cwd: t.cwd || '' });
+          return;
+        }
+        openChat(id);
+        return;
+      }
+      const t = byThread.get(id) || {};
+      attachThread(id, { name: t.name || t.preview || '', cwd: t.cwd || '' });
+    });
+  };
+  box.querySelectorAll('.citem').forEach((el) => {
+    bindRow(el);
+    // 长按删掉本地的这条（电脑上的对话本身不动）
+    const [kind, id] = el.dataset.key.split(':');
+    if (kind !== 'local') return;
+    let timer = null;
+    el.addEventListener('touchstart', () => { timer = setTimeout(() => askRemoveSession(id), 650); }, { passive: true });
+    el.addEventListener('touchend', () => clearTimeout(timer));
+    el.addEventListener('touchmove', () => clearTimeout(timer));
+  });
+}
+
+function askRemoveSession(id) {
+  const s = (state.sessions || []).find((x) => x.id === id);
+  if (!s) return;
+  openSheet('<h3>移出列表？</h3><div class="desc">只是不再显示在手机上，电脑里的对话和文件都不动。</div>' +
+    '<div class="actions"><button id="r-no">取消</button><button class="no" id="r-yes">移出</button></div>', () => {
+    $('r-no').addEventListener('click', closeSheet);
+    $('r-yes').addEventListener('click', async () => {
+      await apiPost('session/delete', { id });
+      closeSheet();
+      await refresh();
+      renderChats();
+      // 删掉的正好是当前看的那条：换到前面一条去，别留个空白主屏
+      if (id === openId) { closeChat(); ensureChatOpen(); }
+      toast('已移出列表');
+    });
+  });
+}
+
+function rowHtml(icon, title, sub, active, tail, kind, id, danger) {
+  return '<button class="row' + (active ? ' on' : '') + (danger ? ' danger' : '') + '" data-key="' + kind + ':' + esc(id) + '">' +
+    '<span class="lead">' + ico(icon) + '</span>' +
+    '<span class="bd"><span class="t1">' + esc(title) + '</span>' +
+    (sub ? '<span class="t2">' + esc(sub) + '</span>' : '') + '</span>' +
+    (tail ? '<span class="tail">' + esc(tail) + '</span>' : '<span class="tail">' + ico('caret-right', 'sm') + '</span>') +
+    '</button>';
+}
+function shortPath(p) {
+  if (!p) return '';
+  const parts = String(p).split(/[\\/]/).filter(Boolean);
+  const name = parts.length <= 1 ? p : parts[parts.length - 1];
+  // 有些目录名就是一长串英文，太长了分组标题会撑破
+  return String(name).length > 22 ? String(name).slice(0, 21) + '…' : name;
+}
+function shortHost(u) {
+  if (!u) return '';
+  try { return new URL(u).host; } catch (_) { return String(u); }
+}
+
+async function loadThreads(force) {
+  // 第一次同步（手机上还没缓存）时给一条进度条，用户知道它在干活
+  if (!threads.length && !cachedThreads().length) { importing = true; renderImport(); }
+  try {
+    const r = await api('threads' + (force ? '?refresh=1' : ''));
+    if (!r.ok) return;
+    const list = (await r.json()).threads || [];
+    threads = list;
+    importedAt = Date.now();
+    writeCache(list);
+  } catch (_) {
+  } finally {
+    importing = false;
+    renderImport();
+    if ($('p-chats').classList.contains('on')) renderChats();
+    // 电脑上那条对话的真实标题可能刚生成出来，顶栏跟着改
+    if ($('chat').classList.contains('on')) {
+      const s = state.active || {};
+      if (s.id && s.id === openId) {
+        $('chat-title').textContent = chatTitle(s);
+        $('chat-path').textContent = dirLabel(s, chatThread(s));
+      }
+    }
+  }
+}
+
+/* ---------- 新建：从项目里挑，不手打路径 ---------- */
+
+/* ---------- 下拉刷新 ---------- */
+function attachPull(scrollEl, indicator, doRefresh) {
+  let startY = 0, pulling = false, dist = 0, busy = false;
+  const txt = indicator.querySelector('span');
+  const reset = () => {
+    indicator.classList.remove('on');
+    indicator.style.height = '0px';
+    pulling = false;
+    dist = 0;
+  };
+  scrollEl.addEventListener('touchstart', (e) => {
+    if (busy || scrollEl.scrollTop > 0) return;
+    startY = e.touches[0].clientY;
+    pulling = true;
+    dist = 0;
+  }, { passive: true });
+  scrollEl.addEventListener('touchmove', (e) => {
+    if (!pulling || busy) return;
+    dist = e.touches[0].clientY - startY;
+    if (dist <= 0 || scrollEl.scrollTop > 0) { reset(); return; }
+    indicator.classList.add('on');
+    indicator.style.height = Math.min(dist * 0.45, 58) + 'px';
+    if (txt) txt.textContent = dist > 110 ? '松手刷新' : '下拉刷新';
+  }, { passive: true });
+  scrollEl.addEventListener('touchend', async () => {
+    if (!pulling || busy) return;
+    if (dist > 110) {
+      busy = true;
+      indicator.classList.add('busy');
+      indicator.classList.remove('on');
+      indicator.style.height = '44px';
+      if (txt) txt.textContent = '正在刷新';
+      try { await doRefresh(); } catch (_) {}
+      indicator.classList.remove('busy');
+      busy = false;
+    }
+    reset();
+  });
+}
+
+async function pickProject(then) {
+  openSheet('<h3>选一个项目</h3><div class="desc">正在读取电脑上常用和最近的目录</div><div id="dirs">' +
+    skeleton(3) + '</div><div class="actions"><button id="p-cancel">取消</button>' +
+    '<button id="p-browse">浏览电脑</button><button id="p-manual">手动输入</button></div>' +
+    '<button class="row" id="p-none" style="margin-top:10px">' +
+    '<span class="lead">' + ico('chat-circle-dots') + '</span>' +
+    '<span class="bd"><span class="t1">不指定项目</span>' +
+    '<span class="t2">不给它绑定项目目录，跑起来用默认目录</span></span></button>', (s) => {
+    $('p-cancel').addEventListener('click', closeSheet);
+    $('p-manual').addEventListener('click', () => manualPath(then));
+    $('p-browse').addEventListener('click', () => browseFolder(then));
+    $('p-none').addEventListener('click', () => { closeSheet(); then(''); });
+    api('dirs').then((r) => r.json()).then((d) => {
+      const dirs = d.dirs || [];
+      if (!dirs.length) {
+        $('dirs').innerHTML = '<div class="empty"><div class="e1">没找到项目目录</div><div class="e2">用手动输入吧</div></div>';
+        return;
+      }
+      let h = '<div class="sheetbox">';
+      dirs.slice(0, 40).forEach((x) => {
+        h += '<button class="row" data-p="' + esc(x.path) + '">' +
+          '<span class="lead">' + ico('folder-simple') + '</span>' +
+          '<span class="bd"><span class="t1">' + esc(x.name) + '</span>' +
+          '<span class="t2">' + esc(x.path) + '</span></span>' +
+          (x.count ? '<span class="tail">' + x.count + '</span>' : '') + '</button>';
+      });
+      h += '</div>';
+      $('dirs').innerHTML = h;
+      $('dirs').querySelectorAll('.row').forEach((el) => {
+        el.addEventListener('click', () => { closeSheet(); then(el.dataset.p); });
+      });
+    }).catch(() => { $('dirs').innerHTML = '<div class="empty"><div class="e1">读取失败</div></div>'; });
+  });
+}
+
+// 浏览电脑文件夹：从驱动器开始一路点进去，最后"在这里新建对话"。
+// 走的是服务端 /api/fs/list，手机不需要任何文件系统权限。
+async function browseFolder(then, startPath) {
+  const render = async (p) => {
+    const body = $('bw-body');
+    if (body) body.innerHTML = skeleton(4);
+    let d = {};
+    try {
+      d = await (await api('fs/list?path=' + encodeURIComponent(p || ''))).json();
+    } catch (_) {
+      if (body) body.innerHTML = '<div class="empty"><div class="e1">读取失败</div></div>';
+      return;
+    }
+    const rows = [];
+    if (d.path) {
+      rows.push('<button class="row" data-go="' + esc(d.parent || '@drives') + '">' +
+        '<span class="lead">' + ico('arrow-left') + '</span>' +
+        '<span class="bd"><span class="t1">上一层</span></span></button>');
+    }
+    (d.drives || []).forEach((x) => rows.push('<button class="row" data-go="' + esc(x.path) + '">' +
+      '<span class="lead">' + ico('hard-drives') + '</span>' +
+      '<span class="bd"><span class="t1">' + esc(x.name) + '</span>' +
+      '<span class="t2">' + esc(x.path) + '</span></span></button>'));
+    (d.dirs || []).forEach((x) => rows.push('<button class="row" data-go="' + esc(x.path) + '">' +
+      '<span class="lead">' + ico('folder-simple') + '</span>' +
+      '<span class="bd"><span class="t1">' + esc(x.name) + '</span></span></button>'));
+    if (!rows.length) rows.push('<div class="empty"><div class="e1">这里没有子文件夹</div></div>');
+
+    const pathLine = $('bw-path');
+    if (pathLine) pathLine.textContent = d.path || '这台电脑';
+    const pick = $('bw-pick');
+    if (pick) {
+      pick.disabled = !d.path;
+      pick.onclick = () => { if (d.path) { closeSheet(); then(d.path); } };
+    }
+    if (body) {
+      body.innerHTML = '<div class="sheetbox">' + rows.join('') + '</div>';
+      body.querySelectorAll('.row').forEach((el) => {
+        el.addEventListener('click', () => {
+          const go = el.dataset.go;
+          render(go === '@drives' ? '' : go);
+        });
+      });
+    }
+  };
+  openSheet('<h3>浏览电脑文件夹</h3>' +
+    '<div class="desc" id="bw-path">这台电脑</div><div id="bw-body">' + skeleton(4) + '</div>' +
+    '<div class="actions"><button id="bw-cancel">取消</button>' +
+    '<button class="go" id="bw-pick">在这里新建对话</button></div>', () => {
+    $('bw-cancel').addEventListener('click', closeSheet);
+  });
+  render(startPath || '');
+}
+function manualPath(then) {
+  openSheet('<h3>手动输入目录</h3><div class="desc">电脑上的绝对路径，例如 D:\\work\\demo</div>' +
+    '<label>目录</label><input id="m-path" placeholder="D:\\work\\demo" autocapitalize="off">' +
+    '<div class="actions"><button id="m-cancel">取消</button><button class="go" id="m-ok">确定</button></div>', () => {
+    $('m-cancel').addEventListener('click', closeSheet);
+    $('m-ok').addEventListener('click', () => { const v = $('m-path').value.trim(); if (v) { closeSheet(); then(v); } });
+  });
+}
+
+function newSession() {
+  closeDrawer();
+  pickProject(async (cwd) => {
+    const r = await apiPost('session/new', { cwd });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || '建不了这个目录'); return; }
+    await refresh();
+    openChat(d.session.id);
+  });
+}
+$('btn-new').addEventListener('click', newSession);
+$('btn-new-fab').addEventListener('click', newSession);
+$('chat-none-new').addEventListener('click', newSession);
+
+// 接管电脑上的一条对话：把真实标题和工作目录一起带过去，
+// 免得列表里堆出一串都叫"电脑上的对话"的空壳。
+async function attachThread(id, meta) {
+  const m = meta || {};
+  const r = await apiPost('session/attach', {
+    threadId: id, name: m.name || '', cwd: m.cwd || '',
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(d.error || '打不开这条对话'); return; }
+  await refresh();
+  openChat(d.session.id);
+}
+
+/* ---------- 对话详情 ---------- */
+const logEl = $('log');
+// 本来就在底部才跟着滚：用户往上翻看历史时，别把他拽回去
+const nearBottom = () => logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 140;
+const scrollDown = (force) => { if (force || nearBottom()) logEl.scrollTop = logEl.scrollHeight; };
+// 同一份内容不重复重画（长对话里，刷新时全量重画最费）
+let lastHistorySig = '';
+function historySig(messages) {
+  if (!messages || !messages.length) return '0';
+  const m = messages[messages.length - 1] || {};
+  return messages.length + '|' + (m.role || '') + '|' + String(m.text || '').length + '|' +
+    ((m.activities || []).length);
+}
+
+// 电脑上那条对话的真实标题 / 目录优先，本地会话可能还留着接管的占位名
+function chatThread(s) {
+  return (s && s.threadId) ? ((threads || []).find((x) => x.id === s.threadId) || {}) : {};
+}
+// 一条对话显示在哪个项目下。手机这边自己建的以它自己的目录为准：选了
+// 「不指定项目」的（目录为空）就一直显示"未指定项目"，不能因为在默认目录里
+// 跑过一轮，就把默认目录显示成它的项目。
+function dirLabel(s, t) {
+  return (s && s.cwd) || (t && t.cwd) || '未指定项目';
+}
+function chatTitle(s) {
+  const t = chatThread(s);
+  return t.name || t.preview || (s && s.title) || '对话';
+}
+
+async function openChat(id) {
+  // 打开一条对话原本要串行等三趟：select → state → 历史，走公网实测 1.7 秒
+  //（单趟地板 363ms）。这里把历史那趟先发出去（threadId 手上的列表里就有），
+  // 而 select 会把新的 state 一起带回来 —— 三趟并成一趟。
+  const known = (state.sessions || []).find((x) => x.id === id) || {};
+  const histP = known.threadId ? readThread(known.threadId) : null;
+  if (id !== state.activeId) {
+    const r = await apiPost('session/select', { id });
+    if (r.ok) applyState(await r.json());
+    else await refresh();
+  }
+  openId = id;
+  loadDraft();              // 这条对话上次没发出去的字，原样放回输入框
+  if (outbox.length) flushOutbox(id);   // 切进来就试着把没发出去的补发掉
+  refreshRunning();       // 换了对话：发送按钮按这条对话自己的状态来
+  seenThreadGen = 0;      // 换了一条对话，校准号重新记
+  remoteRunning = false;
+  lastHistorySig = '';   // 换了一条对话，历史必须重画
+  const s = state.active || {};
+  const t = chatThread(s);
+  const titleNow = chatTitle(s), pathNow = dirLabel(s, t);
+  $('chat-title').textContent = titleNow;
+  $('chat-path').textContent = pathNow;
+  // 连标题一起记下来：下次启动可以不等网络就把这条对话画出来
+  writeLast({ chat: id, chatTitle: titleNow, chatPath: pathNow });
+  closeDrawer();
+  setChatVisible(true);
+  if (window.scrollY) window.scrollTo(0, 0);
+
+  // 先把手上的内容画出来：本轮的本地消息，或者上一次缓存的记录
+  const mine = s.messages || [];
+  const cached = s.threadId ? readMsgs('t-' + s.threadId) : readMsgs('s-' + id);
+  const first = mine.length ? mine : (cached || []);
+  if (first.length) renderHistory(first);
+  else if (s.threadId) logEl.innerHTML = '<div class="act" style="padding:10px 2px">正在读取对话</div>';
+  // 新开的对话本来就没有历史，直接给"打字就能发"的空状态，
+  // 否则会一直挂着"正在读取对话"，看着像卡住了
+  else renderHistory([]);
+
+  // 这一条还在电脑上生成：先挂个"正在生成回答"，别让人以为没反应
+  if (runMatches(runState, s)) showGenerating();
+
+  // 再去电脑上要最新的（这一趟其实早就发出去了，这里只是等结果）
+  if (s.threadId) {
+    try {
+      const d = await (histP || readThread(s.threadId));
+      if (openId !== id) return;   // 用户又切到别的对话了，别把这条的历史画上去
+      if (d) {
+        const remote = d.messages || [];
+        paintContinue(d.lastStatus);
+        applyThreadRun(d.lastStatus);
+        writeThreadStatus(s.threadId, d.lastStatus);
+        if (remote.length) {
+          writeMsgs('t-' + s.threadId, remote);
+          renderHistory(remote);
+          if (runMatches(runState, s)) showGenerating();
+        } else if (!first.length) renderHistory([]);
+      } else if (!first.length) {
+        logEl.innerHTML = '<div class="empty">' + ico('warning-circle') +
+          '<div class="e1">读不到这条对话</div><div class="e2">检查一下手机和电脑的网络</div></div>';
+      }
+    } catch (_) {
+      if (!first.length) {
+        logEl.innerHTML = '<div class="empty">' + ico('warning-circle') +
+          '<div class="e1">读不到这条对话</div><div class="e2">检查一下手机和电脑的网络</div></div>';
+      }
+    }
+  }
+}
+
+function closeChat() {
+  setChatVisible(false);
+  hideGenerating();
+  openId = null;
+  writeLast({ chat: null });
+  renderChats();
+  loadThreads(false);   // 回列表顺手对一遍电脑上的最新状态
+}
+
+// 服务端历史里已经有这条消息了，就别再把它挂成"没发出去"。
+//
+// 不这么做的话：历史画一条真消息，paintQueued 又画一条待发气泡 ——
+// 同一条在界面上出现两遍，而且会一直转着重发（用户看到的就是这个）。
+// 用时间窗比一下，避免把"用户故意连发两句一模一样的话"误删。
+function dropDeliveredQueued(messages) {
+  if (!openId || !outbox.length || !messages || !messages.length) return;
+  let last = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i] && messages[i].role === 'user' && messages[i].text) { last = messages[i]; break; }
+  }
+  if (!last) return;
+  const text = String(last.text).trim();
+  const ts = Number(last.ts) || 0;
+  const keep = outbox.filter((q) => {
+    if (q.sessionId !== openId) return true;          // 别的对话的不动
+    if ((q.text || '').trim() !== text) return true;   // 不是同一条
+    if (!ts || !q.at) return true;
+    return !(ts >= q.at - 120000);                     // 收到的这条就是我发的
+  });
+  if (keep.length !== outbox.length) { outbox = keep; saveOutbox(); }
+}
+
+function renderHistory(messages) {
+  dropDeliveredQueued(messages);
+  const sig = historySig(messages);
+  if (sig === lastHistorySig && logEl.childElementCount) return;
+  lastHistorySig = sig;
+  const s = state.active || {};
+  if (s.threadId) writeMsgs('t-' + s.threadId, messages);
+  else if (s.id) writeMsgs('s-' + s.id, messages);
+  logEl.innerHTML = '';
+  const queuedHere = openId ? queuedFor(openId) : [];
+  if (!messages || !messages.length) {
+    if (!queuedHere.length) {
+      logEl.innerHTML = '<div class="empty">' + ico('chat-circle-dots') +
+        '<div class="e1">直接打字发消息</div><div class="e2">它跑在你自己电脑上，用的就是你本机的 Codex</div></div>';
+      return;
+    }
+  } else {
+	messages.forEach((m) => {
+    if (m.role === 'user') { addUser(m.text); return; }
+    const html = renderMarkdown(m.text || '');
+    addAssistant(html, m.activities);
+    // 桌面端每条回复下面都写着"用时"，这里照抄
+    if (m.durationMs) addElapsedNote(m.durationMs);
+    // 这一轮改了哪些文件：一张汇总卡
+    if (m.files || m.added || m.removed) {
+      renderFileChange({ files: m.files, added: m.added, removed: m.removed });
+    }
+  });
+  // 最后一条助手回复下面挂操作行（复制 / 重试）+ "内容由 AI 生成"
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role !== 'assistant') continue;
+    let prevUser = '';
+    for (let j = i - 1; j >= 0; j--) {
+      if (messages[j].role === 'user') { prevUser = messages[j].text || ''; break; }
+    }
+    appendActions(renderMarkdown(messages[i].text || ''), prevUser);
+    break;
+  }
+  }
+  paintQueued();   // 没发出去的几条永远钉在最下面
+  scrollDown();
+}
+function addUser(text) {
+  const row = document.createElement('div');
+  row.className = 'mrow me';
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.textContent = text;
+  row.appendChild(b);
+  logEl.appendChild(row);
+  scrollDown(true);   // 自己刚发的，一定要跟到底
+}
+function addAssistant(html, activities) {
+  if (activities && activities.length) {
+    const wrap = document.createElement('div');
+    wrap.className = 'acts';
+    // 工具调用多了会刷屏，只留最后几条，其余折成一行
+    const shown = activities.slice(-4);
+    if (activities.length > shown.length) {
+      const d = document.createElement('div');
+      d.className = 'act';
+      d.textContent = '> 前面还有 ' + (activities.length - shown.length) + ' 步';
+      wrap.appendChild(d);
+    }
+    shown.forEach((a) => {
+      const d = document.createElement('div');
+      d.className = 'act';
+      d.textContent = '> ' + a;
+      wrap.appendChild(d);
+    });
+    logEl.appendChild(wrap);
+  }
+  const row = document.createElement('div');
+  row.className = 'mrow ai';
+  const b = document.createElement('div');
+  b.className = 'bubble';
+  b.innerHTML = html;
+  row.appendChild(b);
+  logEl.appendChild(row);
+  attachCopy(b);
+  scrollDown();
+  return b;
+}
+// 文件改动卡片（"4 个文件已更改 +128 -0"）：形态照着桌面端来。
+// 只给汇总，不给每个文件的路径和 diff：手机上不看这些明细，
+// 而走公网把它们传下来纯属白占链路（明细去电脑上看）。
+function renderFileChange(evt) {
+  const row = document.createElement('div');
+  row.className = 'mrow ai';
+  const card = document.createElement('div');
+  card.className = 'fcbox';
+  card.innerHTML =
+    '<span class="lead">' + ico('folder-simple') + '</span>' +
+    '<span class="bd"><div class="t1">' + (evt.files || 0) + ' 个文件已更改</div>' +
+    '<div class="t2"><span class="plus">+' + (evt.added || 0) + '</span>' +
+    '<span class="minus">-' + (evt.removed || 0) + '</span></div></span>';
+  row.appendChild(card);
+  logEl.appendChild(row);
+  scrollDown();
+}
+
+function fmtSize(n) {
+  n = Number(n || 0);
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+}
+
+function copyText(text) {
+  const done = () => toast('已复制');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(() => toast('复制失败'));
+    return;
+  }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); done(); } catch (_) { toast('复制失败'); }
+  ta.remove();
+}
+
+// 助手消息下面的操作行：复制 / 重试 + "内容由AI生成"（桌面端也有这一排）
+function appendActions(html, retryText) {
+  const row = document.createElement('div');
+  row.className = 'actrow';
+  const copy = document.createElement('button');
+  copy.innerHTML = ico('copy');
+  copy.title = '复制';
+  copy.addEventListener('click', () => {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    copyText(tmp.textContent || '');
+  });
+  row.appendChild(copy);
+  if (retryText) {
+    const retry = document.createElement('button');
+    retry.innerHTML = ico('arrow-clockwise');
+    retry.title = '重试这一轮';
+    retry.addEventListener('click', () => {
+      if (running || remoteRunning) { toast('这一轮还在跑'); return; }
+      inputEl.value = retryText;
+      inputEl.style.height = 'auto';
+      send();
+    });
+    row.appendChild(retry);
+  }
+  logEl.appendChild(row);
+  const ai = document.createElement('div');
+  ai.className = 'ailabel';
+  ai.textContent = '内容由 AI 生成';
+  logEl.appendChild(ai);
+}
+
+// 不在那条对话上的审批 / 选择题：发一条本地通知，前台再补一条 toast。
+//
+// 以前这里只处理"当前正开着那条对话"的情况，别的场合什么都不做 ——
+// 2026-10-11 那次就是这么漏的：审批在电脑那边等着人拍板，手机上一点动静
+// 都没有，卡满 10 分钟直接按拒绝处理，那一轮就白跑了。
+const seenPending = new Set();
+function alertPending(title, body, sessionId) {
+  const key = sessionId + '|' + title + '|' + body;
+  if (seenPending.has(key)) return;
+  if (seenPending.size > 50) seenPending.clear();   // 别让它无上限地长
+  seenPending.add(key);
+  const s = (state.sessions || []).find((x) => x.id === sessionId);
+  const who = (s && s.title) ? ('「' + s.title + '」') : '另一条对话';
+  notifyHidden(title + ' · ' + who, body);
+  if (!document.hidden) toast(who + '：' + body);
+}
+
+function renderApproval(evt) {
+  const row = document.createElement('div');
+  row.className = 'mrow ai';
+  const card = document.createElement('div');
+  card.className = 'bubble approval';
+  // 标一下这是哪条审批：轮询补渲染时靠它去重，免得画两遍
+  card.dataset.approval = evt.approvalId || '';
+  card.innerHTML = '<div class="ap-title">' + ico('shield-check', 'sm') + esc(evt.title || '需要你确认') + '</div>' +
+    (evt.detail ? '<pre class="ap-detail">' + esc(evt.detail) + '</pre>' : '') +
+    (evt.text ? '<div class="ap-reason">' + esc(evt.text) + '</div>' : '');
+  const bar = document.createElement('div');
+  bar.className = 'ap-bar';
+  const mk = (label, decision, cls) => {
+    const b = document.createElement('button');
+    b.className = 'ap-btn ' + (cls || '');
+    b.textContent = label;
+    b.addEventListener('click', async () => {
+      bar.querySelectorAll('button').forEach((x) => { x.disabled = true; });
+      b.classList.add('chosen');
+      try { await apiPost('approval', { id: evt.approvalId, decision }); } catch (_) {}
+      scrollDown();
+    });
+    return b;
+  };
+  bar.appendChild(mk('允许一次', 'accept', 'ok'));
+  bar.appendChild(mk('本会话都允许', 'acceptForSession', 'ok'));
+  bar.appendChild(mk('拒绝', 'decline', 'no'));
+  card.appendChild(bar);
+  row.appendChild(card);
+  logEl.appendChild(row);
+  scrollDown();
+}
+
+// 选择题：Codex 让你在几个选项里挑一个。手机直接点，不用回电脑。
+function renderQuestion(evt) {
+  const qs = evt.questions || [];
+  if (!qs.length) return;
+  const answers = {};
+  const row = document.createElement('div');
+  row.className = 'mrow ai';
+  const card = document.createElement('div');
+  card.className = 'bubble approval';
+  card.innerHTML = '<div class="ap-title">' + ico('chat-circle-dots', 'sm') + '需要你选一下</div>';
+  const submit = document.createElement('button');
+  submit.className = 'ap-btn ok';
+  submit.textContent = '确定';
+  submit.disabled = true;
+  submit.style.marginTop = '8px';
+
+  const refresh = () => {
+    submit.disabled = qs.some((q) => !answers[q.id] || !answers[q.id].length);
+    submit.textContent = submit.disabled ? '每个问题都选一个' : '确定';
+  };
+
+  qs.forEach((q) => {
+    const box = document.createElement('div');
+    box.className = 'qbox';
+    const head = document.createElement('div');
+    head.className = 'qhead';
+    head.textContent = q.header || '请选择';
+    box.appendChild(head);
+    if (q.text) {
+      const t = document.createElement('div');
+      t.className = 'qtext';
+      t.textContent = q.text;
+      box.appendChild(t);
+    }
+    const opts = document.createElement('div');
+    opts.className = 'qopts';
+    (q.options || []).forEach((o) => {
+      const b = document.createElement('button');
+      b.className = 'ap-btn';
+      b.textContent = o.label;
+      if (o.description) b.title = o.description;
+      b.addEventListener('click', () => {
+        answers[q.id] = [o.label];
+        opts.querySelectorAll('button').forEach((x) => x.classList.remove('chosen'));
+        b.classList.add('chosen');
+        refresh();
+      });
+      opts.appendChild(b);
+    });
+    box.appendChild(opts);
+    card.appendChild(box);
+  });
+  refresh();
+  submit.addEventListener('click', async () => {
+    if (submit.disabled) return;
+    submit.disabled = true;
+    submit.textContent = '已提交';
+    try { await apiPost('answer', { id: evt.approvalId, answers }); } catch (_) {}
+    scrollDown();
+  });
+  card.appendChild(submit);
+  row.appendChild(card);
+  logEl.appendChild(row);
+  scrollDown();
+}
+
+/* ---------- 附件：拍照 / 选文件 ---------- */
+//
+// WebView 里拿不到文件的真实路径，所以先把内容传到电脑（/api/upload），
+// 电脑落盘后把绝对路径跟着消息发给 Codex：图片当图片看，其它文件当"提到它"。
+let pendingAtts = [];
+// 这一轮的文件改动先记账，跑完只出一张汇总卡（以前改一个文件弹一条，很吵）
+let turnFiles = 0, turnAdded = 0, turnRemoved = 0;
+
+// 错误卡片：和普通回复分开，一眼能看出"这一轮是报错结束的"
+function renderErrorCard(text) {
+  const row = document.createElement('div');
+  row.className = 'mrow ai';
+  const card = document.createElement('div');
+  card.className = 'errcard';
+  card.innerHTML = '<div class="etitle">' + ico('warning-circle', 'sm') + '错误</div>' +
+    '<div class="ebody">' + esc(text) + '</div>';
+  row.appendChild(card);
+  logEl.appendChild(row);
+  scrollDown();
+}
+
+function renderAtts() {
+  const bar = $('attbar');
+  if (!bar) return;
+  bar.innerHTML = '';
+  bar.classList.toggle('on', pendingAtts.length > 0);
+  pendingAtts.forEach((a, i) => {
+    const d = document.createElement('div');
+    d.className = 'att' + (a.path ? '' : ' up');
+    if (a.image && a.thumb) {
+      const img = document.createElement('img');
+      img.src = a.thumb;
+      d.appendChild(img);
+    } else {
+      const nm = document.createElement('div');
+      nm.className = 'nm';
+      nm.textContent = a.name;
+      d.appendChild(nm);
+    }
+    const rm = document.createElement('div');
+    rm.className = 'rm';
+    rm.textContent = '×';
+    rm.addEventListener('click', () => { pendingAtts.splice(i, 1); renderAtts(); });
+    d.appendChild(rm);
+    bar.appendChild(d);
+  });
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',').pop() || '');
+    fr.onerror = reject;
+    fr.readAsDataURL(file);
+  });
+}
+
+async function attachFiles(files) {
+  for (const f of files) {
+    const item = {
+      name: f.name, image: (f.type || '').startsWith('image/'),
+      thumb: '', path: '',
+    };
+    if (item.image) { try { item.thumb = URL.createObjectURL(f); } catch (_) {} }
+    pendingAtts.push(item);
+    renderAtts();
+    try {
+      const data = await fileToBase64(f);
+      const r = await apiPost('upload', { name: f.name, data });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(d.error || ('HTTP ' + r.status));
+      item.path = d.path || '';
+      item.image = !!d.image;
+      if (d.name) item.name = d.name;
+    } catch (e) {
+      pendingAtts = pendingAtts.filter((x) => x !== item);
+      toast('上传失败：' + e.message);
+    }
+    renderAtts();
+  }
+}
+
+$('btn-attach').addEventListener('click', () => $('file-input').click());
+
+/* ---------- 语音输入：原生起系统识别，结果经 __voiceResult 回来 ---------- */
+let voiceListening = false;
+function startVoice() {
+  const n = native();
+  if (!n || !n.voice) { toast('语音输入要更新到新版 App 才有'); return; }
+  if (voiceListening) return;
+  voiceListening = true;
+  $('btn-voice').classList.add('on');
+  buzz(10);
+  n.voice();
+}
+$('btn-voice').addEventListener('click', startVoice);
+window.__voiceResult = (text) => {
+  voiceListening = false;
+  $('btn-voice').classList.remove('on');
+  if (!text) return;   // 用户取消了
+  inputEl.value = (inputEl.value ? inputEl.value + ' ' : '') + text;
+  inputEl.dispatchEvent(new Event('input'));   // 触发自适应高度 + 草稿保存
+  buzz(10);
+  inputEl.focus();
+};
+
+/* ---------- 分享进来：原生把文字攒着，网页放进输入框 ---------- */
+window.__shareReceived = (text) => {
+  if (!text) return;
+  if (curTab !== 'chats') switchTab('chats');
+  ensureChatOpen();
+  inputEl.value = (inputEl.value ? inputEl.value + '\n' : '') + text;
+  inputEl.dispatchEvent(new Event('input'));
+  toast('分享的内容已放进输入框，确认后发送');
+  inputEl.focus();
+};
+// 冷启动时分享先于页面到达：每次页面就绪/回前台都问原生要一次
+function pollShare() {
+  const n = native();
+  if (!n || !n.lastShare) return;
+  try { const t = n.lastShare(); if (t) window.__shareReceived(t); } catch (_) {}
+}
+
+/* ---------- 消息里的图片：点开全屏看，可左右滑 / 双指缩放 / 看原图 / 下载 ---------- */
+const imgview = $('imgview'), imgviewImg = $('imgview-img'), imgstage = $('imgstage');
+const imgviewOrig = $('imgview-orig'), imgviewSave = $('imgview-save');
+const imgviewCount = $('imgview-count');
+
+let imgviewList = [];        // 当前对话里的图，按出现顺序
+let imgviewIdx = -1;
+let imgviewFullURL = '', imgviewIsFull = false;
+// scale=1 时单指左右滑 = 切图；scale>1 时单指拖 = 平移
+let ivScale = 1, ivTx = 0, ivTy = 0;
+const ivPointers = new Map();
+let ivPinch = null, ivDrag = null;
+let ivMoved = false;   // 这一下是拖还是点：拖过就别当成"点空白关闭"
+
+function collectChatImages() {
+  return Array.from(document.querySelectorAll('#log img.mdimg')).map((el) => ({
+    thumb: el.getAttribute('src') || '',
+    full: el.dataset.full || el.getAttribute('src') || '',
+  }));
+}
+
+function applyIvTransform() {
+  imgviewImg.style.transform =
+    'translate(' + ivTx + 'px,' + ivTy + 'px) scale(' + ivScale + ')';
+}
+
+function resetIvTransform() {
+  ivScale = 1; ivTx = 0; ivTy = 0;
+  imgviewImg.classList.remove('snap');
+  applyIvTransform();
+}
+
+// 放大之后别让图被拖出屏幕
+function clampPan() {
+  const r = imgviewImg.getBoundingClientRect();
+  const maxX = Math.max(0, (r.width - window.innerWidth) / 2 + 40);
+  const maxY = Math.max(0, (r.height - window.innerHeight) / 2 + 40);
+  ivTx = Math.max(-maxX, Math.min(maxX, ivTx));
+  ivTy = Math.max(-maxY, Math.min(maxY, ivTy));
+}
+
+function showImgViewerAt(i) {
+  const it = imgviewList[i];
+  if (!it) return;
+  imgviewIdx = i;
+  resetIvTransform();
+  imgviewFullURL = it.full || '';
+  imgviewIsFull = false;
+  imgviewImg.src = it.thumb || it.full || '';
+  const hasFull = !!imgviewFullURL && imgviewFullURL !== imgviewImg.src;
+  imgviewOrig.disabled = !hasFull;
+  imgviewOrig.textContent = hasFull ? '查看原图' : '已是原图';
+  imgviewCount.textContent = imgviewList.length > 1
+    ? ((i + 1) + ' / ' + imgviewList.length) : '';
+}
+
+function openImgViewer(i, list) {
+  imgviewList = list || collectChatImages();
+  if (!imgviewList.length) return;
+  showImgViewerAt(Math.max(0, Math.min(i, imgviewList.length - 1)));
+  imgview.classList.add('on');
+}
+
+function closeImgViewer() {
+  imgview.classList.remove('on');
+  resetIvTransform();
+  imgviewList = [];
+  imgviewIdx = -1;
+}
+
+// 点背景关掉；点按钮和图片本身不关（图片要留着拖动）
+imgview.addEventListener('click', (e) => {
+  if (e.target.closest('.imgbar') || e.target.closest('.imgx')) return;
+  if (e.target === imgviewImg) return;
+  // 刚拖过的这一下不算"点空白"，否则滑完一张图就被顺手关掉了
+  if (ivMoved) { ivMoved = false; return; }
+  closeImgViewer();
+});
+$('imgview-close').addEventListener('click', closeImgViewer);
+
+// 用事件委托：气泡是动态重画的，绑在 #log 上才绑得住
+$('log').addEventListener('click', (e) => {
+  const img = e.target.closest('img.mdimg');
+  if (!img) return;
+  // 列表里画的是缩略图（几十 KB），点开先给同一张，别让用户干等
+  const list = collectChatImages();
+  const src = img.getAttribute('src') || '';
+  const i = list.findIndex((x) => x.thumb === src);
+  openImgViewer(i >= 0 ? i : 0, list);
+});
+
+/* 手势：双指缩放、放大后单指拖动、缩小时单指左右滑切图。
+   用 Pointer Events 而不是 touch 事件 —— 多指和指针捕获都是现成的。 */
+imgstage.addEventListener('pointerdown', (e) => {
+  ivPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  try { imgstage.setPointerCapture(e.pointerId); } catch (_) {}
+  if (ivPointers.size === 2) {
+    const [a, b] = [...ivPointers.values()];
+    ivPinch = { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, scale: ivScale };
+    ivDrag = null;
+  } else if (ivPointers.size === 1) {
+    ivMoved = false;
+    ivDrag = { x0: e.clientX, y0: e.clientY, dx: 0, dy: 0, tx0: ivTx, ty0: ivTy };
+    // 缩放到 1 倍时去掉过渡，跟手滑才不粘
+    if (ivScale <= 1.001) imgviewImg.classList.add('snap');
+  }
+});
+
+imgstage.addEventListener('pointermove', (e) => {
+  if (!ivPointers.has(e.pointerId)) return;
+  ivPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  if (ivPointers.size === 2 && ivPinch) {
+    const [a, b] = [...ivPointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    ivScale = Math.max(1, Math.min(5, ivPinch.scale * d / ivPinch.dist));
+    if (ivScale <= 1.001) { ivTx = 0; ivTy = 0; } else { clampPan(); }
+    applyIvTransform();
+    return;
+  }
+  if (ivPointers.size === 1 && ivDrag) {
+    ivDrag.dx = e.clientX - ivDrag.x0;
+    ivDrag.dy = e.clientY - ivDrag.y0;
+    if (Math.abs(ivDrag.dx) > 6 || Math.abs(ivDrag.dy) > 6) ivMoved = true;
+    if (ivScale <= 1.001) {
+      imgviewImg.style.transform = 'translateX(' + ivDrag.dx + 'px)';
+    } else {
+      ivTx = ivDrag.tx0 + ivDrag.dx;
+      ivTy = ivDrag.ty0 + ivDrag.dy;
+      clampPan();
+      applyIvTransform();
+    }
+  }
+});
+
+function endPointer(e) {
+  ivPointers.delete(e.pointerId);
+  if (ivPointers.size < 2) ivPinch = null;
+  if (!ivDrag) {
+    if (ivScale <= 1.001) resetIvTransform();
+    return;
+  }
+  const d = ivDrag;
+  ivDrag = null;
+  imgviewImg.classList.remove('snap');
+  if (ivPointers.size === 0 && ivScale <= 1.001) {
+    // 滑过屏宽的两成就翻页，同时要求以横向为主，免得竖直滚动误触
+    const th = Math.min(90, window.innerWidth * 0.2);
+    if (Math.abs(d.dx) > th && Math.abs(d.dx) > Math.abs(d.dy) * 1.2) {
+      const next = imgviewIdx + (d.dx < 0 ? 1 : -1);
+      if (next >= 0 && next < imgviewList.length) { showImgViewerAt(next); return; }
+    }
+    resetIvTransform();   // 没过阈值就弹回去
+  } else {
+    clampPan();
+    applyIvTransform();
+  }
+}
+imgstage.addEventListener('pointerup', endPointer);
+imgstage.addEventListener('pointercancel', endPointer);
+
+imgviewOrig.addEventListener('click', () => {
+  if (!imgviewFullURL || imgviewIsFull) return;
+  imgviewIsFull = true;
+  imgviewOrig.disabled = true;
+  imgviewOrig.textContent = '原图加载中…';
+  // 先悄悄预载，装好了再换上 —— 免得点下去白屏等半天
+  const probe = new Image();
+  probe.onload = () => {
+    imgviewImg.src = imgviewFullURL;
+    imgviewOrig.textContent = '已是原图';
+  };
+  probe.onerror = () => {
+    imgviewIsFull = false;
+    imgviewOrig.disabled = false;
+    imgviewOrig.textContent = '原图加载失败';
+  };
+  probe.src = imgviewFullURL;
+});
+
+imgviewSave.addEventListener('click', () => {
+  const url = imgviewIsFull ? imgviewFullURL : (imgviewImg.src || '');
+  if (!url) return;
+  const x = native();
+  // App 里交给系统下载器（存到「下载」目录）；纯浏览器退化成新开一页，
+  // 用户自己长按保存。
+  if (x && x.download) { x.download(url); return; }
+  window.open(url, '_blank');
+});
+$('file-input').addEventListener('change', (e) => {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (!files.length) return;
+  attachFiles(files);
+});
+
+/* ---------- 发消息 ---------- */
+const inputEl = $('input');
+const sendBtn = $('send');
+function setRunning(v) {
+  running = v;
+  paintSend();
+}
+
+// 发送键三种状态：空闲=发送；正在跑且输入框空=停止；正在跑且输入框有字=引导。
+// 这也是 Codex 桌面版的习惯：正在跑的时候，打字再点就是"把这句话插进这一轮"。
+function paintSend() {
+  const hasText = !!inputEl.value.trim();
+  // 电脑端发起的那一轮也算"正在进行"：手机上照样能停止或引导
+  const busyNow = running || remoteRunning;
+  if (busyNow && !hasText) {
+    sendBtn.innerHTML = '<svg class="ic"><use href="#i-stop-fill"/></svg>';
+    sendBtn.title = '停止';
+    sendBtn.classList.add('stop');
+    return;
+  }
+  sendBtn.innerHTML = '<svg class="ic"><use href="#i-arrow-up"/></svg>';
+  sendBtn.title = busyNow ? '引导（把这句话插进正在跑的一轮）' : '发送';
+  sendBtn.classList.remove('stop');
+}
+
+// 引导：不打断正在跑的这一轮，把新要求插进去
+async function steer() {
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  saveDraft();
+  paintSend();
+  try {
+    const r = await apiPost('steer', { text });
+    if (r.ok) { buzz(15); toast('已引导，它会带着这句继续'); remoteReload(true); }
+    else {
+      const d = await r.json().catch(() => ({}));
+      toast(d.error || '引导没有成功');
+    }
+  } catch (e) { toast('引导失败：' + e.message); }
+}
+
+// 上一轮被打断 / 出错时给一条"继续"（和 Codex 桌面版同一个形态）。
+// 状态由服务端 threads/read 的 lastStatus 给出。
+function paintContinue(status) {
+  const bar = $('contbar');
+  if (!bar) return;
+  const need = status === 'interrupted' || status === 'failed';
+  bar.classList.toggle('on', need);
+  const b = $('cont-btn');
+  if (b && need) b.textContent = (status === 'failed' ? '上一轮出错了' : '上一轮被打断了') + ' · 继续';
+}
+
+// 用线程自己的状态校准"这条对话在不在跑"。
+//
+// lastStatus 是 app-server 里的权威状态（inProgress / completed / interrupted），
+// 不依赖某一条通知有没有送到手机上。切对话、通知丢了、甚至服务重启过，
+// 只要回到这条对话读一次历史，就能把"正在生成"的反馈重新挂回来 ——
+// 这正是"明明还在跑，手机上却跟停了一样"的兜底。
+function applyThreadRun(status) {
+  if (status === 'inProgress') {
+    remoteRunning = true;
+    lastRunVerifyAt = Date.now();
+    if (!liveRunAt) liveRunAt = Date.now();
+    liveTickStart();
+  } else if (status === 'completed' || status === 'interrupted' || status === 'failed') {
+    // 明确读到"这一轮结束了"才收；读不到（网络抖、接口异常）就当不知道，
+    // 别把正在跑的提示条误撤掉。
+    if (running) return;
+    remoteRunning = false;
+    hideGenerating();
+  }
+}
+
+// "任务耗时 X 分 Y 秒"：做成居中的小胶囊，点 × 可以收起来（桌面端也是这个形态）
+function addElapsedNote(ms) {
+  ms = Number(ms || 0);
+  if (!ms || ms < 3000) return;
+  const d = document.createElement('div');
+  d.className = 'elapsedchip';
+  d.innerHTML = '<span>任务耗时 ' + fmtElapsed(ms) + '</span>' +
+    '<button class="x" aria-label="收起">×</button>';
+  d.querySelector('.x').addEventListener('click', () => d.remove());
+  logEl.appendChild(d);
+  scrollDown();
+}
+
+// 一轮刚结束时（手机上自己发的那一轮）就地显示用时。
+//
+// 记住"已经报过哪个开始时间"，同一个只报一条。为什么要去重：app-server
+// 那边要是把 turn 挂在 inProgress 上不放（2026-10-11 那个"两轮并进一个
+// turn"的毛病就会这样），而服务端这边其实已经收工，两边状态一打架，
+// 这个函数就会被一秒一次地叫起来，手机上刷出一整屏
+// "任务耗时 44 秒 / 45 秒 / 46 秒…"。
+let lastElapsedStart = 0;
+function noteElapsed(startAt) {
+  const at = Number(startAt || 0);
+  if (!at || at === lastElapsedStart) return;
+  lastElapsedStart = at;
+  addElapsedNote(Date.now() - at);
+}
+// 草稿按对话各自记住：切走再切回来、甚至 App 被杀掉，没发出去的字都还在。
+const draftKey = () => 'draft:' + (openId || '');
+function saveDraft() {
+  try {
+    if (inputEl.value) localStorage.setItem(draftKey(), inputEl.value);
+    else localStorage.removeItem(draftKey());
+  } catch (_) {}
+}
+function loadDraft() {
+  try { inputEl.value = localStorage.getItem(draftKey()) || ''; } catch (_) {}
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 132) + 'px';
+}
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 132) + 'px';
+  saveDraft();
+  paintSend();   // 正在跑的时候：有字变"引导"，没字是"停止"
+});
+// 键盘弹起时安卓会顺手把整页往上顶，顶栏因此被推走；
+// 这里把文档按住，只让输入框和消息区各自滚动。
+inputEl.addEventListener('focus', () => {
+  if (window.scrollY) window.scrollTo(0, 0);
+  setTimeout(() => { scrollDown(); if (window.scrollY) window.scrollTo(0, 0); }, 260);
+});
+window.addEventListener('scroll', () => { if (window.scrollY) window.scrollTo(0, 0); }, { passive: true });
+
+/* ---------- 离线发件箱：没发出去先存手机里，网一通就自动补发 ---------- */
+let outbox = [];
+try { outbox = JSON.parse(localStorage.getItem('outbox-v1') || '[]'); } catch (_) { outbox = []; }
+function saveOutbox() { try { localStorage.setItem('outbox-v1', JSON.stringify(outbox)); } catch (_) {} }
+function queuedFor(sid) { return outbox.filter((q) => q.sessionId === sid); }
+function enqueueOutbox(item) {
+  if (!outbox.some((q) => q.cid === item.cid)) { outbox.push(item); saveOutbox(); }
+}
+function dequeueOutbox(cid) {
+  const n = outbox.filter((q) => q.cid !== cid);
+  if (n.length !== outbox.length) { outbox = n; saveOutbox(); }
+}
+const queuedText = (it) => (it.atts && it.atts.length)
+  ? (it.text ? it.text + '\n' : '') + it.atts.map((a) => '附件：' + a.name).join('\n')
+  : (it.text || '');
+const newClientId = () => 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+// 服务端现在是不是正在跑这条对话。手机自己发的那一轮也算（所以 desk 那条也认）：
+// 人一旦离开界面，那一轮就只剩服务端知道它在跑了。
+function sessionRunningHere(sid) {
+  if (!sid) return false;
+  if (runState && runState.sessionId === sid) return true;
+  if (deskRun && deskRun.sessionId === sid) return true;
+  const s = (state.sessions || []).find((x) => x.id === sid);
+  return !!(s && s.threadId && runThreads[s.threadId]);
+}
+
+// 自动重发最多试几次。到顶就停手、只认手动点 —— 一直转圈比一次失败更让人难受。
+const MAX_AUTO_TRY = 5;
+function bumpOutboxTries(item) {
+  item.tries = (item.tries || 0) + 1;
+  const it = outbox.find((q) => q.cid === item.cid);
+  if (it && it !== item) it.tries = item.tries;
+  saveOutbox();
+  return item.tries;
+}
+function resetOutboxTries(cid) {
+  const it = outbox.find((q) => q.cid === cid);
+  if (!it) return;
+  it.tries = 0;
+  saveOutbox();
+}
+
+// 把一条自己的消息变成"等待发送"的虚线气泡：点一下立刻重发，长按丢弃。
+//
+// 三种状态要分清楚，弄错了用户就会看到"电脑上明明跑得好好的，手机却一直说没发出去"：
+//   - 这一轮还在电脑上跑：那就是**已经送到了**，等它跑完就行；
+//   - 自动重发试够了：停手，等用户点一下；
+//   - 其余：断网等待，联网自动重发。
+function markBubblePending(b, item) {
+  if (!b || b.classList.contains('pending')) return;
+  b.classList.add('pending');
+  const runningHere = sessionRunningHere(item.sessionId);
+  const tries = item.tries || 0;
+  let icon = ico('circle-notch', 'spin');
+  let text = '没发出去，联网后自动重发 · 点此立即重发 · 长按丢弃';
+  if (runningHere) {
+    text = '已经发到电脑上了，正在跑 · 跑完这里会自动出来';
+  } else if (tries >= MAX_AUTO_TRY) {
+    icon = ico('warning-circle');
+    text = '没发出去（已试 ' + tries + ' 次）· 点此再试 · 长按丢弃';
+  }
+  const tag = document.createElement('div');
+  tag.className = 'qtag';
+  tag.innerHTML = icon + '<span>' + esc(text) + '</span>';
+  b.appendChild(tag);
+  let timer = 0;
+  b.addEventListener('click', () => {
+    if (!b.classList.contains('pending')) return;
+    resetOutboxTries(item.cid);   // 手动点了就重新给满次数
+    flushOutbox(item.sessionId);
+  });
+  b.addEventListener('touchstart', () => {
+    timer = setTimeout(() => {
+      if (!b.classList.contains('pending')) return;
+      dequeueOutbox(item.cid);
+      const row = b.closest('.mrow'); if (row) row.remove();
+      toast('已丢弃这条没发出去的消息');
+    }, 650);
+  }, { passive: true });
+  const cancel = () => clearTimeout(timer);
+  b.addEventListener('touchend', cancel);
+  b.addEventListener('touchmove', cancel, { passive: true });
+}
+
+// 历史整块重画后，把当前对话里没发出去的消息补在末尾。
+function paintQueued() {
+  logEl.querySelectorAll('.bubble.pending').forEach((b) => { const r = b.closest('.mrow'); if (r) r.remove(); });
+  if (!openId) return;
+  queuedFor(openId).forEach((item) => {
+    const row = document.createElement('div');
+    row.className = 'mrow me';
+    const b = document.createElement('div');
+    b.className = 'bubble';
+    b.dataset.cid = item.cid;
+    b.textContent = queuedText(item);
+    row.appendChild(b);
+    logEl.appendChild(row);
+    markBubblePending(b, item);
+  });
+}
+
+// 补发只动"当前打开的这条对话"，绝不后台把用户正在看的界面切走。
+// 一轮只能发一条（第二条服务端会按"上一轮还没结束"挡回），所以一次补一条。
+let flushing = false;
+// 这条消息其实早就送到了？看手上的历史里有没有它。
+//
+// 这是"补发"最后一道闸：openChat 里补发发生在读历史之前，而服务端的去重标记
+// 会因为服务重启丢掉（每次换装都重启）。所以重发之前先看一眼本地缓存的历史 ——
+// 上面已经有这条一样的话，就说明送到了，直接从发件箱摘掉，绝不再发一遍。
+function alreadyInHistory(sessionId, item) {
+  const s = (state.sessions || []).find((x) => x.id === sessionId) || {};
+  const msgs = (s.threadId ? readMsgs('t-' + s.threadId) : null) || readMsgs('s-' + sessionId) || [];
+  let last = null;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i] && msgs[i].role === 'user' && msgs[i].text) { last = msgs[i]; break; }
+  }
+  if (!last) return false;
+  if (String(last.text).trim() !== String(item.text || '').trim()) return false;
+  const ts = Number(last.ts) || 0;
+  if (!ts || !item.at) return true;   // 没时间戳就按内容认，宁可少发一次
+  return ts >= item.at - 120000;
+}
+
+async function flushOutbox(sid) {
+  const sessionId = sid || openId;
+  // 这一轮还在电脑上跑：那条其实已经送到了，等它跑完；别在这里反复重发
+  if (flushing || !sessionId || running || remoteRunning || sessionRunningHere(sessionId)) return;
+  const item = outbox.find((q) => q.sessionId === sessionId);
+  if (!item) return;
+  if (alreadyInHistory(sessionId, item)) {
+    // 历史里已经有了：早就送到了，摘掉就行（这次重发就是之前那次重复发送的来源）
+    dequeueOutbox(item.cid);
+    renderChats();
+    return;
+  }
+  if ((item.tries || 0) >= MAX_AUTO_TRY) return;   // 自动重发试够了，只认手动点
+  flushing = true;
+  try { await submitMessage(item, { fromQueue: true }); }
+  finally { flushing = false; }
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  const atts = pendingAtts.filter((a) => a.path);
+  if ((!text && !atts.length) || running) return;
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  saveDraft();
+  // 附件已经传到电脑上了，清掉列表；这一轮用刚才记下的那份
+  if (atts.length) { pendingAtts = []; renderAtts(); }
+  const item = {
+    cid: newClientId(),
+    sessionId: state.activeId || '',
+    text,
+    atts: atts.map((a) => ({ path: a.path, name: a.name, image: a.image })),
+    at: Date.now(),
+  };
+  await submitMessage(item, { fromQueue: false });
+}
+
+async function submitMessage(item, opts) {
+  const fromQueue = !!opts.fromQueue;
+  const sendingId = item.sessionId;
+  // 补发：先拿掉旧的虚线气泡，重画一条正常的自己消息；再失败会重新变虚线。
+  const oldPending = logEl.querySelector('.bubble.pending[data-cid="' + item.cid + '"]');
+  if (oldPending) { const rr = oldPending.closest('.mrow'); if (rr) rr.remove(); }
+  addUser(queuedText(item));
+  const mine = logEl.querySelectorAll('.mrow.me .bubble');
+  const userBubble = mine[mine.length - 1] || null;
+  if (userBubble) userBubble.dataset.cid = item.cid;
+  stopped = false;
+  if (sendingId) runningIds.add(sendingId);
+  setRunning(true);
+  // 秒表从点发送就开始走：长任务（比如 6 分 47 秒）也能看得见
+  liveRunAt = Date.now();
+  setLiveActivity('正在思考');
+  liveTickStart();
+  const title = (state.active || {}).title || 'Codex';
+
+  let bubble = null, actsWrap = null, deltaBuf = '', raf = false, hadError = false;
+  // 每来一小段就整段重画一次太亏：一次重画要把整篇 markdown 重新解析、重新排版。
+  // 增量本来就是按网络来回成批到的（公网一趟 0.4 秒），这里再限到 80 毫秒一档，
+  // 看着一样是"边写边出"，但同一段文字不会被反复重画。
+  let lastPaint = 0, paintTimer = null;
+  const paint = () => {
+    if (raf) return;
+    const wait = 80 - (Date.now() - lastPaint);
+    if (wait > 0) {
+      if (!paintTimer) {
+        paintTimer = setTimeout(() => { paintTimer = null; paint(); }, wait);
+      }
+      return;
+    }
+    raf = true;
+    requestAnimationFrame(() => {
+      raf = false;
+      lastPaint = Date.now();
+      if (bubble) { bubble.innerHTML = renderMarkdown(deltaBuf); scrollDown(); }
+    });
+  };
+
+  const isQueued = () => outbox.some((q) => q.cid === item.cid);
+
+  try {
+    const resp = await api('send', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: item.text,
+        attachments: item.atts.map((a) => ({ path: a.path, name: a.name, image: a.image })),
+        clientId: item.cid,
+        // 必须写明发到哪条：不然补发会落到"当前活跃"的那条对话里，
+        // 用户切一下对话，上一条消息就被发到别的对话去了
+        sessionId: item.sessionId || sendingId || '',
+      }),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
+      if (err.duplicate) {
+        // 上一次其实已经送到、电脑上正在跑：补发到此为止，内容等历史补回来。
+        dequeueOutbox(item.cid);
+        buzz(15);
+        toast('这条已经在电脑上跑了');
+        if (fromQueue) reloadOpenChat();
+        hadError = false;
+        return;
+      }
+      // 断网、忙线、服务端报错：都先收进发件箱，能发的时候它会自己出去。
+      bumpOutboxTries(item);   // 记一次尝试，免得永远自动重试下去
+      enqueueOutbox(item);
+      markBubblePending(userBubble, item);
+      hadError = true;
+      buzz(60);   // 出错给长一点的振动，和"已发出"区分开
+      return;
+    }
+    dequeueOutbox(item.cid);   // 服务端真收到了，发件箱里不用再留
+    buzz(15);     // 已发出：轻轻确认一下
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        let evt; try { evt = JSON.parse(line); } catch (_) { continue; }
+        if (evt.type === 'delta') {
+          setLiveActivity('正在写回答');
+          if (!bubble) { bubble = addAssistant('', null); bubble.classList.add('caret'); }
+          deltaBuf += evt.text || '';
+          paint();
+        } else if (evt.type === 'approval') {
+          renderApproval(evt);
+        } else if (evt.type === 'question') {
+          renderQuestion(evt);
+        } else if (evt.type === 'fileChange') {
+          // 一次运行可能改很多文件：这里先记账，等这一轮结束汇总成一张卡
+          turnFiles = Math.max(turnFiles, Number(evt.files) || 0);
+          turnAdded += Number(evt.added) || 0;
+          turnRemoved += Number(evt.removed) || 0;
+        } else if (evt.type === 'message') {
+          if (!bubble) bubble = addAssistant('', null);
+          if (evt.text) deltaBuf = evt.text;
+          bubble.innerHTML = renderMarkdown(deltaBuf);
+          bubble.classList.add('caret');
+          attachCopy(bubble);
+          scrollDown();
+        } else if (evt.type === 'tool') {
+          setLiveActivity('正在执行：' + (evt.text || ''));
+          if (!actsWrap) { actsWrap = document.createElement('div'); actsWrap.className = 'acts'; logEl.appendChild(actsWrap); }
+          const d = document.createElement('div');
+          d.className = 'act';
+          d.textContent = '> ' + evt.text;
+          actsWrap.appendChild(d);
+          scrollDown();
+        } else if (evt.type === 'reasoning') {
+          setLiveActivity('正在思考');
+          if (!bubble) { bubble = addAssistant('', null); bubble.classList.add('caret'); }
+        } else if (evt.type === 'working' && !bubble) {
+          setLiveActivity('正在思考');
+          bubble = addAssistant('', null); bubble.classList.add('caret');
+        } else if (evt.type === 'error') {
+          hadError = true;
+          renderErrorCard(evt.text || '这一轮出错了');
+        }
+      }
+    }
+  } catch (err) {
+    // 连接没走完（断网 / 切后台 / 信号断流）：先收进发件箱。服务端可能已经
+    // 收到并在跑，补发时靠 clientId 幂等挡回，绝不会把同一句话再跑一遍。
+    hadError = true;
+    enqueueOutbox(item);
+    markBubblePending(userBubble, item);
+  } finally {
+    if (bubble) bubble.classList.remove('caret');
+    if (!bubble && !stopped && !isQueued()) {
+      addAssistant('<span style="color:var(--faint)">这一轮没有返回内容</span>');
+    }
+    if (sendingId) runningIds.delete(sendingId);
+    refreshRunning();
+    if (liveRunAt) noteElapsed(liveRunAt);
+    // 这一轮的文件改动，最后汇总成一张卡
+    if (turnFiles || turnAdded || turnRemoved) {
+      renderFileChange({ files: turnFiles, added: turnAdded, removed: turnRemoved });
+      turnFiles = 0; turnAdded = 0; turnRemoved = 0;
+    }
+    hideGenerating();
+    liveRunAt = 0;
+    setLiveActivity('');
+    // 人不在看的时候，用系统通知告诉你（还在发件箱等重发的不算）
+    if (document.hidden && !isQueued()) {
+      const n = native();
+      const body = (deltaBuf || '').replace(/```[\s\S]*?```/g, ' [代码] ').replace(/\s+/g, ' ').slice(0, 120);
+      if (n && n.notify) n.notify(hadError ? '任务结束但出错了' : '任务完成', title, body);
+    }
+    await refresh();
+    const now = state.active || {};
+    const nt = chatThread(now);
+    $('chat-title').textContent = chatTitle(now);
+    $('chat-path').textContent = dirLabel(now, nt);
+  }
+}
+sendBtn.addEventListener('click', () => {
+  const busyNow = running || remoteRunning;
+  if (!busyNow) return send();
+  if (inputEl.value.trim()) return steer();   // 有字就引导
+  apiPost('stop', {});                        // 没字就停止
+});
+// "继续"：把"继续"当作一句话发出去，走的就是正常发送那条路
+$('cont-btn').addEventListener('click', () => {
+  if (running || remoteRunning) return;
+  inputEl.value = '继续';
+  inputEl.style.height = 'auto';
+  send();
+});
+inputEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !running) { e.preventDefault(); send(); }
+});
+// 对话页左上角：回列表（列表是主屏）
+$('chat-back').addEventListener('click', () => closeChat());
+  $('mon-back').addEventListener('click', closeMon);
+  $('mon-refresh').addEventListener('click', loadMon);
+$('chat-menu').addEventListener('click', () => {
+  const s = state.active || {};
+  openSheet('<h3>这条对话</h3>' +
+    '<div class="desc">改动只影响这一条对话。</div>' +
+    '<label>工作目录</label><input id="f-cwd" value="' + esc(s.cwd || '') + '" autocapitalize="off">' +
+    '<label>权限</label>' + choiceRows('f-sandbox', 'sandbox', s.sandbox) +
+    '<label>需要审批时</label>' + choiceRows('f-approval', 'approval', s.approval) +
+    '<div class="actions"><button class="no" id="f-del">删除</button>' +
+    '<button class="go" id="f-save">保存</button></div>', (sheet) => {
+    bindChoices(sheet);
+    $('f-save').addEventListener('click', async () => {
+      const r = await apiPost('session/update', {
+        cwd: $('f-cwd').value.trim(), sandbox: choiceVal('f-sandbox'), approval: choiceVal('f-approval'),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(d.error || '保存失败'); return; }
+      closeSheet(); await refresh(); toast('已保存');
+    });
+    $('f-del').addEventListener('click', async () => {
+      await apiPost('session/delete', { id: s.id });
+      closeSheet();
+      closeChat();
+      await refresh();
+      renderChats();
+      ensureChatOpen();
+      toast('已从列表移除');
+    });
+  });
+});
+
+/* ---------- 服务 ---------- */
+function renderServices() {
+  // ntfy 是"要看消息流"的东西，不是一个网页入口，所以不放这里。
+  const list = (state.services || []).filter((s) => !s.group && !/ntfy/i.test(s.url));
+  // 电脑状态是内置的（数据来自电脑端自己），不是外部服务入口，所以不跟着删
+  let h = '<div class="tiles">' +
+    '<button class="tile" id="mon-open"><span class="ti">' + ico('gauge') + '</span>' +
+    '<span class="tn">电脑状态</span>' +
+    '<span class="td" id="mon-tile-sub">CPU · 内存 · 磁盘 · 网络</span></button>';
+  list.forEach((s) => {
+    let host = s.url;
+    try { host = new URL(s.url).host; } catch (_) {}
+    h += '<button class="tile" data-url="' + esc(s.url) + '" data-id="' + esc(s.id) + '">' +
+      '<span class="ti">' + ico(s.icon || 'desktop') + '</span>' +
+      '<span class="tn">' + esc(s.name) + '</span>' +
+      '<span class="td">' + esc(host) + '</span></button>';
+  });
+  h += '<button class="tile add" id="addsvc"><span class="ti">' + ico('plus') + '</span><span class="tn">添加</span></button>';
+  h += '</div>';
+  if (!list.length) {
+    h = '<div class="group"><div class="empty">' + ico('squares-four') +
+      '<div class="e1">还没有自己的服务</div><div class="e2">点「添加」加一个 tailnet 里的网址</div></div></div>' +
+      '<div class="tiles">' +
+      '<button class="tile" id="mon-open"><span class="ti">' + ico('gauge') + '</span>' +
+      '<span class="tn">电脑状态</span>' +
+      '<span class="td" id="mon-tile-sub">CPU · 内存 · 磁盘 · 网络</span></button>' +
+      '<button class="tile add" id="addsvc"><span class="ti">' + ico('plus') + '</span><span class="tn">添加</span></button></div>';
+  }
+  $('services-body').innerHTML = h;
+
+  $('mon-open').addEventListener('click', openMon);
+  // 磁贴副标题顺手带一眼当前负载，点进去之前就知道电脑忙不忙
+  api('sysinfo').then((r) => (r.ok ? r.json() : null)).then((d) => {
+    if (!d || d.error) return;
+    const el = $('mon-tile-sub');
+    if (el) el.textContent = 'CPU ' + Math.round(Number(d.cpu) || 0) + '% · 内存 ' + Math.round(pctOf(d.memUsed, d.memTotal)) + '%';
+  }).catch(() => {});
+
+  document.querySelectorAll('.tile[data-url]').forEach((el) => {
+    let timer = null;
+    el.addEventListener('click', () => openUrl(el.dataset.url, el.dataset.id));
+    el.addEventListener('touchstart', () => { timer = setTimeout(() => askRemoveService(el.dataset.id), 650); }, { passive: true });
+    el.addEventListener('touchend', () => clearTimeout(timer));
+    el.addEventListener('touchmove', () => clearTimeout(timer));
+  });
+  $('addsvc').addEventListener('click', () => openSheet('<h3>添加服务</h3>' +
+    '<label>名称</label><input id="s-name" placeholder="路由器">' +
+    '<label>地址</label><input id="s-url" placeholder="https://xxx.tailxxxx.ts.net" autocapitalize="off" inputmode="url">' +
+    '<label>说明</label><input id="s-desc" placeholder="备注，可留空">' +
+    '<div class="actions"><button id="s-cancel">取消</button><button class="go" id="s-ok">添加</button></div>', () => {
+    $('s-cancel').addEventListener('click', closeSheet);
+    $('s-ok').addEventListener('click', async () => {
+      const r = await apiPost('services/add', {
+        name: $('s-name').value.trim(), url: $('s-url').value.trim(), desc: $('s-desc').value.trim(),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { toast(d.error || '添加失败'); return; }
+      state.services = d.services; closeSheet(); renderServices(); toast('已添加');
+    });
+  }));
+}
+function askRemoveService(id) {
+  const svc = (state.services || []).find((s) => s.id === id);
+  if (!svc) return;
+  openSheet('<h3>移除「' + esc(svc.name) + '」</h3><div class="desc">只是从列表里去掉。</div>' +
+    '<div class="actions"><button id="r-no">取消</button><button class="no" id="r-yes">移除</button></div>', () => {
+    $('r-no').addEventListener('click', closeSheet);
+    $('r-yes').addEventListener('click', async () => {
+      const r = await apiPost('services/delete', { id });
+      const d = await r.json().catch(() => ({}));
+      state.services = d.services || []; closeSheet(); renderServices(); toast('已移除');
+    });
+  });
+}
+function openUrl(u, id) {
+  const svc = (state.services || []).find((s) => s.id === id);
+  const n = native();
+  // 手机进不了 tailnet 内部地址，必须走电脑中转。反代是要口令的，
+  // 拼地址时得把口令带上，否则打开就是"403 链接无效或已过期"。
+  let target = u;
+  if (svc && svc.proxy) {
+    const url = new URL(svc.proxy, location.origin);
+    url.searchParams.set('k', TOKEN);
+    target = url.toString();
+  }
+  if (n && n.openUrl) n.openUrl(target, svc ? svc.name : '');
+  else window.open(target, '_blank');
+}
+
+/* ---------- 电脑状态 ---------- */
+let monTimer = null, monBusy = false, monBuilt = false;
+const monCharts = {};
+
+// 图表配色跟着页面走，别在 JS 里写死两套
+function themeColor(name) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || '#69c497';
+}
+
+function fmtBytes(n) {
+  n = Number(n) || 0;
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? Math.round(n) : n.toFixed(n < 10 ? 1 : 0)) + ' ' + u[i];
+}
+function fmtDur(sec) {
+  sec = Math.max(0, Math.floor(Number(sec) || 0));
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d) return d + ' 天 ' + h + ' 小时';
+  if (h) return h + ' 小时 ' + m + ' 分';
+  return m + ' 分';
+}
+const pctOf = (used, total) => (total ? Math.min(100, (used / total) * 100) : 0);
+const barOf = (pct) => '<div class="bar"><i class="' + (pct >= 85 ? 'warn' : '') + '" style="width:' +
+  Math.max(1.5, Math.min(100, pct)).toFixed(1) + '%"></i></div>';
+
+const clockOf = (ms) => {
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, '0');
+  return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+};
+// 纵轴上限取个整数（1 / 2 / 5 打头），免得每来一个点轴就跳一下
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const exp = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / exp;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * exp;
+}
+
+/* 图表统一走 Chart.js（MIT，随电脑端一起发出去，不依赖外网 CDN）。
+   配色、网格、提示框都在这里定一次，三张图长一个样。 */
+function monChartOptions(max) {
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#24262c', borderColor: '#2a2c33', borderWidth: 1,
+        titleColor: '#9a9ca3', bodyColor: '#e6e7e9', displayColors: false,
+        padding: 8, cornerRadius: 8, caretSize: 4, caretPadding: 6,
+        callbacks: {
+          label: (c) => (c.dataset.label ? c.dataset.label + ' ' : '') +
+            (c.dataset.human ? fmtBytes(c.parsed.y) + '/s' : c.formattedValue + (c.dataset.unit || '')),
+        },
+      },
+    },
+    scales: {
+      x: { display: false },
+      y: {
+        beginAtZero: true, suggestedMax: max || undefined,
+        ticks: { display: false }, border: { display: false },
+        grid: { color: 'rgba(255,255,255,.06)', drawTicks: false },
+      },
+    },
+    elements: { point: { radius: 0, hitRadius: 10 }, line: { borderWidth: 1.6, tension: .35 } },
+  };
+}
+function monChart(canvasId, series, max) {
+  const el = $(canvasId);
+  if (!el || !window.Chart) return null;   // 脚本没加载出来就退化成纯数字
+  const ch = new Chart(el, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: series.map((s) => ({
+        label: s.label || '', data: [], unit: s.unit || '', human: !!s.human,
+        borderColor: s.color, backgroundColor: s.fill || 'transparent', fill: !!s.fill,
+      })),
+    },
+    options: monChartOptions(max),
+  });
+  ch.__fixedMax = !!max;   // CPU 固定 0-100，其余按窗口峰值自适应
+  return ch;
+}
+function monChartData(ch, labels, series) {
+  if (!ch) return;
+  if (!ch.__fixedMax) {
+    let top = 0;
+    series.forEach((vals) => vals.forEach((v) => { if (v > top) top = v; }));
+    ch.options.scales.y.suggestedMax = niceMax(top);
+  }
+  ch.data.labels = labels;
+  series.forEach((vals, i) => { if (ch.data.datasets[i]) ch.data.datasets[i].data = vals; });
+  ch.update('none');
+}
+function setText(id, s) {
+  const el = $(id);
+  if (el && el.textContent !== s) el.textContent = s;
+}
+function setVal(id, s, warn) {
+  const el = $(id);
+  if (!el) return;
+  if (el.textContent !== s) el.textContent = s;
+  el.classList.toggle('warn', !!warn);
+}
+function setBar(id, pct) {
+  const el = $(id);
+  if (!el) return;
+  el.style.width = Math.max(1.5, Math.min(100, pct)).toFixed(1) + '%';
+  el.classList.toggle('warn', pct >= 85);
+}
+function renderCores(list) {
+  const box = $('cpu-cores');
+  if (!box) return;
+  if (box.childElementCount !== list.length) {
+    box.innerHTML = list.map(() => '<i><b></b></i>').join('');
+  }
+  for (let i = 0; i < box.children.length; i++) {
+    const v = Math.min(100, Math.max(0, Number(list[i]) || 0));
+    const fill = box.children[i].firstElementChild;
+    fill.style.height = Math.max(4, v).toFixed(1) + '%';
+    fill.classList.toggle('warn', v >= 85);
+    box.children[i].title = '核心 ' + (i + 1) + ' · ' + Math.round(v) + '%';
+  }
+}
+
+const MON_FOLD_KEY = 'codex.mon.fold';
+function monFolded() {
+  try { return JSON.parse(localStorage.getItem(MON_FOLD_KEY) || '[]'); } catch (_) { return []; }
+}
+function monFoldSave(list) {
+  try { localStorage.setItem(MON_FOLD_KEY, JSON.stringify(list)); } catch (_) {}
+}
+function monCard(id, title, head, body) {
+  return '<div class="mcard" data-card="' + id + '">' +
+    '<div class="mh"><span class="mt">' + title + '</span>' + head +
+    '<svg class="ic sm foldic"><use href="#i-caret-right"/></svg></div>' +
+    '<div class="mbody">' + body + '</div></div>';
+}
+
+// 骨架只搭一次：之后每 2 秒只改数字和曲线，不重画整个页面，
+// 这样滚动位置不跳、图表也不会闪。
+function buildMon() {
+  if (monBuilt) return;
+  monBuilt = true;
+  const accent = themeColor('--accent'), dim = themeColor('--dim');
+  $('mon-body').innerHTML = [
+    monCard('cpu', 'CPU', '<span class="mv" id="v-cpu">0%</span>',
+      '<div class="chartbox"><canvas id="ch-cpu"></canvas></div>' +
+      '<div class="cores" id="cpu-cores"></div>' +
+      '<div class="ms" id="t-cpu"></div>'),
+    monCard('gpu', '显卡', '<span class="mv" id="v-gpu">0%</span><span class="mu" id="u-gpu"></span>',
+      '<div class="bar"><i id="b-gpu"></i></div><div class="ms" id="t-gpu"></div>'),
+    monCard('mem', '内存', '<span class="mv" id="v-mem">0%</span><span class="mu" id="u-mem"></span>',
+      '<div class="bar"><i id="b-mem"></i></div><div class="ms" id="t-mem"></div>'),
+    monCard('disk', '磁盘', '',
+      '<div id="disk-list"></div><div class="kv" id="disk-io"></div>' +
+      '<div class="chartbox"><canvas id="ch-io"></canvas></div>'),
+    monCard('net', '网络', '<span class="mu" id="u-net"></span>',
+      '<div id="net-list"></div><div class="chartbox"><canvas id="ch-net"></canvas></div>' +
+      '<div class="ms" id="t-net"></div>'),
+    monCard('proc', '占内存最多的程序', '', '<div id="proc-list"></div>'),
+    '<div class="mcard"><div class="kv"><span class="kn" id="f-host"></span>' +
+      '<span class="kv2" id="f-up"></span></div><div class="ms" id="f-at"></div></div>',
+  ].join('');
+
+  const folded = monFolded();
+  $('mon-body').querySelectorAll('.mcard[data-card]').forEach((el) => {
+    const id = el.dataset.card;
+    el.classList.toggle('fold', folded.indexOf(id) >= 0);
+    el.querySelector('.mh').addEventListener('click', () => {
+      el.classList.toggle('fold');
+      const now = monFolded().filter((x) => x !== id);
+      if (el.classList.contains('fold')) now.push(id);
+      monFoldSave(now);
+    });
+  });
+
+  monCharts.cpu = monChart('ch-cpu', [{ color: accent, fill: 'rgba(105,196,151,.12)', label: 'CPU', unit: '%' }], 100);
+  monCharts.io = monChart('ch-io', [
+    { color: accent, label: '读', human: true },
+    { color: dim, label: '写', human: true },
+  ], 0);
+  monCharts.net = monChart('ch-net', [
+    { color: accent, label: '↓', human: true },
+    { color: dim, label: '↑', human: true },
+  ], 0);
+}
+
+function openMon() {
+  $('sysmon').classList.add('on');
+  if (!monBuilt) {
+    $('mon-body').innerHTML = skeleton(3);
+    $('mon-sub').textContent = '正在读取';
+  }
+  loadMon();
+  if (monTimer) clearInterval(monTimer);
+  monTimer = setInterval(() => { if (!document.hidden) loadMon(); }, 2000);
+}
+function closeMon() {
+  $('sysmon').classList.remove('on');
+  if (monTimer) { clearInterval(monTimer); monTimer = null; }
+}
+async function loadMon() {
+  if (monBusy) return;
+  monBusy = true;
+  try {
+    const r = await api('sysinfo');
+    const d = await r.json();
+    if (d && !d.error) { renderMon(d); return; }
+    throw new Error(d && d.error ? d.error : 'bad payload');
+  } catch (_) {
+    $('mon-sub').textContent = '没连上';
+    // 之前读到过就别把画面擦掉，继续显示上一份数据
+    if (!monBuilt) {
+      $('mon-body').innerHTML = '<div class="empty">' + ico('warning-circle') +
+        '<div class="e1">读不到电脑状态</div><div class="e2">检查手机和电脑的网络，再点右上角刷新</div></div>';
+    }
+  } finally {
+    monBusy = false;
+  }
+}
+
+function renderMon(d) {
+  buildMon();
+  const hist = d.history || [];
+  const stamps = hist.map((s) => clockOf(s.at));
+  const num = (v) => Number(v) || 0;
+
+  // CPU：总量 + 每核小柱
+  const cpu = num(d.cpu);
+  setVal('v-cpu', Math.round(cpu) + '%', cpu >= 85);
+  monChartData(monCharts.cpu, stamps, [hist.map((s) => num(s.cpu))]);
+  renderCores(d.perCore || []);
+  setText('t-cpu', (d.cores || 0) + ' 核 · 最近一分钟');
+
+  // 显卡：没有 N 卡就把这张卡收起来，不占地方
+  const gpuCard = document.querySelector('.mcard[data-card="gpu"]');
+  const gpus = d.gpus || [];
+  if (gpuCard) {
+    gpuCard.style.display = gpus.length ? '' : 'none';
+    if (gpus.length) {
+      const g = gpus[0];
+      setVal('v-gpu', Math.round(num(g.util)) + '%', num(g.util) >= 90);
+      const name = String(g.name || '').replace(/^NVIDIA\s+/i, '');
+      setText('u-gpu', (gpus.length > 1 ? gpus.length + ' 张卡 · ' : '') + name);
+      setBar('b-gpu', pctOf(g.memUsed, g.memTotal));
+      setText('t-gpu', '显存 ' + fmtBytes(g.memUsed) + ' / ' + fmtBytes(g.memTotal) +
+        (g.temp ? ' · ' + Math.round(num(g.temp)) + '°C' : ''));
+    }
+  }
+
+  // 内存
+  const memPct = pctOf(d.memUsed, d.memTotal);
+  setVal('v-mem', Math.round(memPct) + '%', memPct >= 85);
+  setText('u-mem', fmtBytes(d.memUsed) + ' / ' + fmtBytes(d.memTotal));
+  setBar('b-mem', memPct);
+  setText('t-mem', d.swapTotal ? '页面文件 ' + fmtBytes(d.swapUsed) + ' / ' + fmtBytes(d.swapTotal) : '');
+
+  // 磁盘：容量 + 读写速率
+  const disks = d.disks || [];
+  $('disk-list').innerHTML = disks.map((dk) => {
+    const used = Math.max(0, num(dk.total) - num(dk.free));
+    const pct = pctOf(used, dk.total);
+    return '<div class="draw"><span class="dn">' + esc(dk.name) + '</span>' +
+      '<span class="dv">' + fmtBytes(used) + ' / ' + fmtBytes(dk.total) + '</span></div>' + barOf(pct);
+  }).join('');
+  const ioNote = d.ioNote || '';
+  $('disk-io').innerHTML = '<span class="kn">读写</span><span class="kv2">' +
+    (ioNote ? esc(ioNote) : '↓ ' + fmtBytes(d.ioRead) + '/s · ↑ ' + fmtBytes(d.ioWrite) + '/s') + '</span>';
+  const ioChart = $('disk-io').nextElementSibling;
+  if (ioChart) ioChart.style.display = ioNote ? 'none' : '';
+  if (!ioNote) {
+    monChartData(monCharts.io, stamps, [hist.map((s) => num(s.ioRead)), hist.map((s) => num(s.ioWrite))]);
+  }
+
+  // 网络：总量 + 每张在用的网卡
+  const nics = d.nics || [];
+  $('net-list').innerHTML = nics.slice(0, 4).map((n) =>
+    '<div class="draw"><span class="dn">' + esc(n.name) + '</span>' +
+    '<span class="dv">↓ ' + fmtBytes(n.rx) + '/s · ↑ ' + fmtBytes(n.tx) + '/s</span></div>').join('');
+  // 只有一张网卡时，标题上那行和下面那行数字一样，就不重复了
+  setText('u-net', nics.length > 1 ? '↓ ' + fmtBytes(d.netRx) + '/s · ↑ ' + fmtBytes(d.netTx) + '/s' : '');
+  setText('t-net', '开机以来 ↓ ' + fmtBytes(d.netRxTotal) + ' · ↑ ' + fmtBytes(d.netTxTotal));
+  monChartData(monCharts.net, stamps, [hist.map((s) => num(s.netRx)), hist.map((s) => num(s.netTx))]);
+
+  // 进程
+  $('proc-list').innerHTML = (d.procs || []).map((p) =>
+    '<div class="mproc"><span class="pn">' + esc(p.name) + '</span>' +
+    (p.n > 1 ? '<span class="pc">×' + p.n + '</span>' : '') +
+    '<span class="pm">' + fmtBytes(p.mem) + '</span></div>').join('');
+
+  // 底下那行：谁、开了多久、什么时候刷的
+  setText('f-host', d.host || '这台电脑');
+  setText('f-up', '已开机 ' + fmtDur(d.uptime));
+  setText('f-at', '每 2 秒自动刷一次 · ' + clockOf(d.at));
+  $('mon-sub').textContent = (d.host || '') + ' · 已开机 ' + fmtDur(d.uptime);
+}
+
+/* ---------- 我的 ---------- */
+function renderMe() {
+  const s = state.active || {};
+  const n = native();
+  const box = $('me-body');
+  const feed = state.feed || {};
+  const verText = n ? ('随行 v' + n.versionName()) : '网页版';
+  const verSub = n ? ('版本号 ' + n.versionCode()) : '在 App 里打开才有系统通知和更新';
+  box.innerHTML =
+    '<div class="hero">' +
+      '<div class="name">' + esc(verText) + '</div>' +
+      '<div class="ver">' + esc(verSub) + '</div>' +
+      '<div class="up' + (updateInfo ? '' : ' none') + '" id="me-up">' +
+        ico(updateInfo ? 'arrow-circle-down' : 'check-circle', 'sm') +
+        '<span>' + esc(updateInfo ? ('有新版本 v' + (updateInfo.versionName || updateInfo.versionCode) + ' 可以更新') : '已经是最新版本') + '</span>' +
+        '<span class="sp"></span>' + ico('caret-right', 'sm') +
+      '</div>' +
+    '</div>' +
+    '<div class="group"><div class="grouphead">当前对话</div><div class="sheetbox">' +
+      rowHtml('folder-simple', '工作目录', shortPath(s.cwd || '') || '未指定', false, '', 'noop', 'cwd') +
+      rowHtml('shield-check', '权限与审批', permLabel(s), false, '', 'noop', 'perm') +
+    '</div></div>' +
+    '<div class="group"><div class="grouphead">通知</div><div class="sheetbox">' +
+      rowHtml('bell', '通知设置', notifyLabel(), false, '', 'noop', 'notify') +
+      rowHtml('desktop', '电脑代收', feed.on ? ('已开启 · 缓存 ' + (feed.count || 0) + ' 条') : '未开启', false, '', 'noop', 'feedopen') +
+    '</div></div>' +
+    '<div class="group"><div class="grouphead">这台手机</div><div class="sheetbox">' +
+      rowHtml('arrow-circle-down', '检查更新', n ? ('v' + n.versionName() + '（' + n.versionCode() + '）') : '未安装 App', false, '', 'noop', 'update') +
+      rowHtml('arrows-clockwise', '重新配对', '换一台电脑时用', false, '', 'noop', 'pair') +
+      rowHtml('arrow-clockwise', '开机自启', '重启手机后仍能收到通知', false, '', 'noop', 'autostart') +
+    '</div></div>' +
+    '<div class="group"><div class="grouphead">电脑</div><div class="sheetbox">' +
+      rowHtml('desktop', state.machine || '未知', shortHost(state.publicUrl), false, '', 'noop', 'host') +
+    '</div></div>';
+  box.querySelector('#me-up').addEventListener('click', () => checkUpdate());
+
+  const bind = (key, fn) => { const el = box.querySelector('[data-key="noop:' + key + '"]'); if (el) el.addEventListener('click', fn); };
+  bind('cwd', () => pickProject(async (p) => { await apiPost('config', { defaultCwd: p }); await refresh(); renderMe(); toast('已设为默认目录'); }));
+  bind('perm', () => permSheet(s));
+  bind('notify', openNotifySheet);
+  bind('feedopen', () => switchTab('feed'));
+  bind('update', checkUpdate);
+  bind('pair', () => { const x = native(); if (x && x.repair) x.repair(); else toast('请在 App 里重新配对'); });
+  bind('autostart', () => {
+    const x = native();
+    if (x && x.openAutostart) { x.openAutostart(); toast('在系统列表里把「随行」打开'); }
+    else toast('请在系统设置里找到自启动管理');
+  });
+  bind('host', () => { const u = state.publicUrl; if (u) openUrl(u, ''); });
+}
+
+// 电脑让手机做的事（抓图 / 传日志 / 清日志）。
+// 手机端不放按钮——这些都从电脑那边发起，手机每轮刷新时问一次。
+function runPhoneCmd(cmd) {
+  const x = native();
+  // 电脑派来的动作是一个 JSON 字符串（{"action":...}），先还原成对象
+  if (typeof cmd === 'string' && cmd.charAt(0) === '{') {
+    try { cmd = JSON.parse(cmd); } catch (_) {}
+  }
+  // 电脑可以派"动作"过来：打开抽屉、点某个按钮、填输入框……
+  // 这样我能在电脑上完全模拟你的操作，自己点、自己看，不用来回描述。
+  if (cmd && typeof cmd === 'object' && cmd.action) { runRemoteAction(cmd); return; }
+  if (!x) return;
+  if (cmd === 'shot' && x.screenshot) toast(x.screenshot('电脑要求'));
+  else if (cmd === 'log' && x.sendLog) toast(x.sendLog());
+  else if (cmd === 'clear' && x.clearLog) x.clearLog();
+}
+
+// 电脑派来的页面动作。每一条都尽量用"像人点一样"的方式：直接触发元素的 click，
+// 这样走的是和你手指完全相同的代码路径。
+function runRemoteAction(a) {
+  const log = (m) => { const n = native(); if (n && n.log) n.log('remote', m); };
+  try {
+    let el = null;
+    switch (a.action) {
+      case 'reload':
+        log('reload');
+        location.reload();
+        return;
+      case 'openDrawer':
+        // 列表已经是主屏，"打开抽屉"等价于回到列表
+        if (typeof closeChat === 'function') closeChat();
+        break;
+      case 'closeDrawer':
+        if (typeof closeDrawer === 'function') closeDrawer();
+        break;
+      case 'tab':
+        el = document.querySelector('nav button[data-tab="' + a.name + '"]');
+        if (el) el.click();
+        break;
+      case 'openChat': {
+        const s = (state.sessions || []).find((x) => x.title && x.title.includes(a.text || ''));
+        if (s) { closeDrawer(); openChat(s.id); }
+        break;
+      }
+      case 'click':
+        el = document.querySelector(a.sel || '');
+        if (el) el.click();
+        break;
+      case 'type':
+        el = document.querySelector(a.sel || '');
+        if (el) { el.value = a.text || ''; el.dispatchEvent(new Event('input', { bubbles: true })); }
+        break;
+      case 'scrollTop': {
+        const sc = a.sel ? document.querySelector(a.sel) : null;
+        if (sc) sc.scrollTop = 0;
+        break;
+      }
+      default:
+        log('未知动作: ' + a.action);
+        return;
+    }
+    log('动作 ' + a.action + (a.sel ? (' ' + a.sel) : '') + ' → ' + (el ? '已执行' : '没找到目标'));
+  } catch (e) {
+    log('动作失败: ' + e.message);
+  }
+}
+function permLabel(s) {
+  const sandbox = { 'read-only': '只读', 'workspace-write': '可改文件', 'danger-full-access': '完全放开' }[s.sandbox] || s.sandbox || '默认';
+  const approval = { 'on-request': '需要时问我', untrusted: '多数动作都问', never: '从不问' }[s.approval] || s.approval || '';
+  return approval ? sandbox + ' · ' + approval : sandbox;
+}
+
+/* 当前对话的权限与审批。对话菜单和「我的」里都从这里开，样式只有一处。 */
+function permSheet(s) {
+  s = s || {};
+  openSheet('<h3>权限与审批</h3>' +
+    '<div class="desc">管它能碰什么、什么时候需要你点一下。</div>' +
+    '<label>权限</label>' + choiceRows('p-sandbox', 'sandbox', s.sandbox) +
+    '<label>需要审批时</label>' + choiceRows('p-approval', 'approval', s.approval) +
+    '<div class="actions"><button id="p-cancel">取消</button><button class="go" id="p-ok">保存</button></div>', (sheet) => {
+    bindChoices(sheet);
+    $('p-cancel').addEventListener('click', closeSheet);
+    $('p-ok').addEventListener('click', async () => {
+      await apiPost('session/update', { sandbox: choiceVal('p-sandbox'), approval: choiceVal('p-approval') });
+      closeSheet(); await refresh(); renderMe(); toast('已保存');
+    });
+  });
+}
+
+function notifyLabel() {
+  const f = state.feed || {};
+  const n = state.notify || {};
+  const t = state.tasks || {};
+  const parts = [];
+  if (f.on) parts.push('服务器通知已开');
+  if (n.channel && n.channel !== 'none') {
+    parts.push(({ serverchan: 'Server酱', pushplus: 'PushPlus', wecom: '企业微信', ntfy: 'ntfy', custom: '自定义' })[n.channel] || n.channel);
+  }
+  if (t.on) parts.push('任务播报已开');
+  if (n.onDone) parts.push('完成后提醒');
+  if (n.onApproval) parts.push('审批时提醒');
+  return parts.length ? parts.join(' · ') : '都关着';
+}
+/* 第三方推送渠道。每个渠道要填什么不一样，写清楚就不用一个个试。 */
+const CHANNELS = [
+  ['none', '不推送', '只在 App 里看，不打扰微信', 'bell'],
+  ['serverchan', 'Server酱', '微信收到推送，填 SendKey', 'paper-plane-tilt'],
+  ['pushplus', 'PushPlus', '微信收到推送，填 token', 'paper-plane-tilt'],
+  ['wecom', '企业微信群机器人', '填完整的 Webhook 地址', 'chat-circle-dots'],
+  ['ntfy', 'ntfy 频道', '填频道地址，手机用同一个', 'bell'],
+  ['custom', '自定义地址', '自己搭的接口，直接 POST', 'desktop'],
+];
+const CHANNEL_FIELD = {
+  serverchan: ['SendKey', '在 sct.ftqq.com 拿，形如 SCTxxxxxx', 'SCT...'],
+  pushplus: ['Token', '在 pushplus.plus 拿，一串 32 位字符', '你的 token'],
+  wecom: ['Webhook 地址', '群机器人里复制整条地址', 'https://qyapi.weixin.qq.com/...'],
+  ntfy: ['频道地址', '比如 https://ntfy.sh/你的频道名', 'https://ntfy.sh/...'],
+  custom: ['接口地址', '会以 JSON POST 出去，带 title 和 body', 'https://...'],
+};
+
+/* 让手机原生也去订阅同一个频道：App 退到后台甚至被关掉，通知照样到。 */
+function syncNtfy() {
+  const x = native();
+  if (!x || !x.setNtfy) return;
+  const f = state.feed || {};
+  const fallback = ((state.services || []).find((s) => /ntfy/i.test(s.url)) || {}).url || '';
+  const url = f.url || fallback;
+  const on = !!f.on;
+  // 只在真的变了才通知原生，否则每次打开 App 都会弹一次"开始接收通知"
+  const last = readLast().ntfy || {};
+  if (last.url === url && last.on === on) return;
+  writeLast({ ntfy: { url, on } });
+  try { x.setNtfy(url, on); } catch (_) {}
+}
+
+function openNotifySheet() {
+  const n = state.notify || {};
+  const feed = state.feed || {};
+  const tasks = state.tasks || {};
+  const rootsText = (tasks.roots || []).join('\n');
+  const ntfySvc = (state.services || []).find((s) => /ntfy/i.test(s.url));
+  const savedNtfy = feed.url || (ntfySvc ? ntfySvc.url : '');
+  let picked = n.channel || 'none';
+  const channelsHtml = () => '<div class="chans">' + CHANNELS.map(([v, name, desc, icon]) =>
+    '<button class="chan' + (picked === v ? ' on' : '') + '" data-ch="' + v + '">' +
+    '<span class="lead">' + ico(icon) + '</span>' +
+    '<span class="bd"><span class="t1">' + esc(name) + '</span>' +
+    '<span class="t2">' + esc(desc) + '</span></span>' +
+    '<span class="tick">' + ico('check-circle', 'sm') + '</span></button>').join('') + '</div>';
+  const fieldHtml = () => {
+    const f = CHANNEL_FIELD[picked];
+    if (!f) return '';
+    return '<label>' + esc(f[0]) + '</label>' +
+      '<input id="n-v" value="' + esc(n.value || n.url || '') + '" placeholder="' + esc(f[2]) + '" autocapitalize="off">' +
+      '<div class="hint">' + esc(f[1]) + '</div>';
+  };
+  openSheet('<h3>通知</h3>' +
+    '<div class="desc">电脑一直开着替你收消息，手机关掉也不会漏。</div>' +
+    '<div class="sheetbox" style="margin-top:14px">' +
+      '<button class="row" id="n-ntfy"><span class="lead">' + ico('bell') + '</span>' +
+      '<span class="bd"><span class="t1">接收服务器通知</span>' +
+      '<span class="t2">' + (feed.on ? '正在替你收着' : '已关闭') + '</span></span>' +
+      '<span class="sw' + (feed.on ? ' on' : '') + '"><i></i></span></button>' +
+    '</div>' +
+    '<label>频道地址</label><input id="n-ntfy-url" value="' + esc(savedNtfy) + '" autocapitalize="off" inputmode="url">' +
+    '<label>拉取间隔（秒）</label><input id="n-ntfy-int" value="' + (feed.interval || 30) + '" inputmode="numeric">' +
+    '<div class="hint">ntfy 免费版只留 12 小时，电脑按这个间隔去取，取到就存下来。</div>' +
+    '<div class="actions"><button id="n-apply">保存频道</button>' +
+    '<button class="go" id="n-turn">' + (feed.on ? '停止接收' : '开始接收') + '</button></div>' +
+    '<label style="margin-top:26px">推送到第三方</label>' +
+    '<div id="n-chans">' + channelsHtml() + '</div>' +
+    '<div id="n-field">' + fieldHtml() + '</div>' +
+    '<div class="actions"><button id="n-test">发测试</button><button class="go" id="n-ok">保存推送</button></div>' +
+    '<label style="margin-top:26px">系统通知</label>' +
+    '<div class="sheetbox">' +
+      '<button class="row" id="n-local"><span class="lead">' + ico('desktop') + '</span>' +
+      '<span class="bd"><span class="t1">测试手机通知</span>' +
+      '<span class="t2">任务跑完、需要审批都会推到这里</span></span>' +
+      '<span class="tail">' + ico('caret-right', 'sm') + '</span></button>' +
+    '</div>' +
+    '<label style="margin-top:26px">任务播报</label>' +
+    '<div class="sheetbox">' +
+      '<button class="row" id="n-task"><span class="lead">' + ico('newspaper') + '</span>' +
+      '<span class="bd"><span class="t1">计划任务产出提醒</span>' +
+      '<span class="t2">' + (tasks.on ? '有新日报 / 精读 / 周报就推给你' : '已关闭') + '</span></span>' +
+      '<span class="sw' + (tasks.on ? ' on' : '') + '"><i></i></span></button>' +
+    '</div>' +
+    '<label>知识库目录</label>' +
+    '<textarea id="n-task-roots" rows="2" autocapitalize="off" spellcheck="false" ' +
+      'placeholder="D:\\work\\knowledge">' + esc(rootsText) + '</textarea>' +
+    '<div class="hint">计划任务把成果写在这些目录里，电脑盯着它，写完就把内容推过来（多个目录换行分开）。</div>' +
+    '<div class="actions"><button id="n-task-try">试推最近一份日报</button>' +
+    '<button class="go" id="n-task-save">保存</button></div>', () => {
+    const bindChannels = () => {
+      $('n-chans').querySelectorAll('.chan').forEach((el) => {
+        el.addEventListener('click', () => { picked = el.dataset.ch; repaintChannel(); });
+      });
+    };
+    const repaintChannel = () => {
+      $('n-chans').innerHTML = channelsHtml();
+      $('n-field').innerHTML = fieldHtml();
+      bindChannels();
+    };
+    bindChannels();
+    const saveChannel = async () => {
+      const url = $('n-ntfy-url').value.trim();
+      const iv = parseInt($('n-ntfy-int').value, 10) || 30;
+      const r = await apiPost('notify/watch?refresh=1', { url, interval: iv });
+      const d = await r.json().catch(() => ({}));
+      if (d.state) state.feed = d.state;
+      syncNtfy();
+    };
+    const fieldValue = () => picked === 'none' ? '' : ((($('n-v') || {}).value || '')).trim();
+    const taskRoots = () => $('n-task-roots').value.split('\n').map((s) => s.trim()).filter(Boolean);
+
+    $('n-local').addEventListener('click', () => { const x = native(); if (x && x.testNotify) x.testNotify(); else toast('要在 App 里才有系统通知'); });
+    $('n-task').addEventListener('click', async () => {
+      const next = !tasks.on;
+      const r = await apiPost('notify/tasks', { on: next, roots: taskRoots() });
+      const d = await r.json().catch(() => ({}));
+      if (d.tasks) state.tasks = d.tasks;
+      closeSheet(); await refresh(); renderMe();
+      toast(next ? '任务有新产出就推给你' : '已停止任务播报');
+    });
+    $('n-task-save').addEventListener('click', async () => {
+      const r = await apiPost('notify/tasks', { on: tasks.on !== false, roots: taskRoots() });
+      const d = await r.json().catch(() => ({}));
+      if (d.tasks) state.tasks = d.tasks;
+      closeSheet(); await refresh(); renderMe(); toast('已保存');
+    });
+    $('n-task-try').addEventListener('click', async () => {
+      const r = await apiPost('notify/tasks', { on: tasks.on !== false, roots: taskRoots(), try: true });
+      const d = await r.json().catch(() => ({}));
+      if (d.tasks) state.tasks = d.tasks;
+      if (r.ok) { closeSheet(); await refresh(); switchTab('feed'); toast('推了一条，去通知里看'); }
+      else toast(d.error || '没有可推的内容');
+    });
+    $('n-ntfy').addEventListener('click', () => toggleNtfy());
+    $('n-turn').addEventListener('click', () => toggleNtfy());
+    $('n-apply').addEventListener('click', async () => {
+      await saveChannel();
+      closeSheet(); await refresh(); syncNtfy(); renderMe(); toast('已保存');
+    });
+    $('n-ok').addEventListener('click', async () => {
+      const v = fieldValue();
+      if (picked !== 'none' && !v) { toast('先填' + (CHANNEL_FIELD[picked] ? CHANNEL_FIELD[picked][0] : '内容')); return; }
+      await saveChannel();
+      await apiPost('notify/settings', { channel: picked, value: v });
+      closeSheet(); await refresh(); syncNtfy(); renderMe();
+      toast(picked === 'none' ? '已关闭第三方推送' : '已保存，可以点发测试试试');
+    });
+    $('n-test').addEventListener('click', async () => {
+      await saveChannel();
+      await apiPost('notify/settings', { channel: picked, value: fieldValue() });
+      const r = await apiPost('notify/test', {});
+      const d = await r.json().catch(() => ({}));
+      toast(r.ok ? '发出去了，去手机上看一眼' : (d.error || '没发出去'));
+    });
+  });
+}
+
+async function toggleNtfy() {
+  const feed = state.feed || {};
+  const url = $('n-ntfy-url') ? $('n-ntfy-url').value.trim() : (feed.url || '');
+  const iv = $('n-ntfy-int') ? (parseInt($('n-ntfy-int').value, 10) || 30) : (feed.interval || 30);
+  if (!feed.on && !url) { toast('先填频道地址'); return; }
+  const next = !feed.on;
+  const r = await apiPost('notify/watch?refresh=1', { url, on: next, interval: iv });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) { toast(d.error || '没设置成功'); return; }
+  state.feed = d.state;
+  closeSheet();
+  await refresh();
+  syncNtfy();
+  renderMe();
+  toast(next ? '电脑开始替你收通知了' : '已停止接收');
+  if (next) switchTab('feed');
+}
+
+/* ---------- 更新 ---------- */
+let updateInfo = null;
+
+/* ---------- 通知（电脑替我们缓存的 ntfy 消息） ---------- */
+let feedItems = [];
+function loadFeed(force) {
+  return api('notifications' + (force ? '?refresh=1' : '')).then((r) => r.json()).then((d) => {
+    feedItems = d.items || [];
+    const st = d.state || {};
+    const el = $('feed-state');
+    if (el) {
+      el.textContent = st.on ? (feedItems.length + ' 条') : '未开启';
+    }
+    if ($('p-feed').classList.contains('on')) renderFeed();
+  }).catch(() => {});
+}
+function renderFeed() {
+  const box = $('feed-body');
+  if (!feedItems.length) {
+    box.innerHTML = '<div class="group"><div class="empty">' + ico('bell') +
+      '<div class="e1">还没有通知</div>' +
+      '<div class="e2">在「我的」里开启后，电脑会一直替你收着</div></div></div>';
+    return;
+  }
+  let h = '<div class="group"><div class="sheetbox">';
+  feedItems.forEach((it) => {
+    const t = it.title || '通知';
+    const when = hhmm(it.time ? it.time * 1000 : 0);
+    h += '<button class="row" data-feed="' + esc(it.id) + '">' +
+      '<span class="lead">' + ico('bell', 'sm') + '</span>' +
+      '<span class="bd"><span class="t1">' + esc(t) + '</span>' +
+      '<span class="t2">' + esc(it.body || '') + '</span></span>' +
+      '<span class="tail">' + esc(when) + '</span></button>';
+  });
+  h += '</div></div>';
+  box.innerHTML = h;
+  box.querySelectorAll('[data-feed]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const it = feedItems.find((x) => x.id === el.dataset.feed);
+      if (!it) return;
+      openSheet('<h3>' + esc(it.title || '通知') + '</h3>' +
+        '<div class="desc" style="white-space:pre-wrap">' + linkify(it.body || '') + '</div>' +
+        '<div class="actions"><button class="go" id="fd-ok">知道了</button></div>', () => {
+        $('fd-ok').addEventListener('click', closeSheet);
+        $('sheet').querySelectorAll('a.lnk').forEach((a) => {
+          a.addEventListener('click', () => {
+            const x = native();
+            if (x && x.openUrl) x.openUrl(a.dataset.url, '');
+            else window.open(a.dataset.url, '_blank');
+          });
+        });
+      });
+    });
+  });
+}
+
+async function checkUpdate() {
+  const n = native();
+  if (!n) { toast('请在安装的 App 里使用'); return; }
+  let info = {};
+  try {
+    const r = await api('app/version');
+    info = await r.json();
+  } catch (_) { toast('连不上电脑'); return; }
+  if (!info.available || !info.versionCode) { toast('电脑上还没有发布新版本'); return; }
+  updateInfo = info.versionCode > n.versionCode() ? info : null;
+  if ($('p-me').classList.contains('on')) renderMe();
+  if (info.versionCode <= n.versionCode()) { toast('已经是最新的 v' + n.versionName()); return; }
+  const notes = String(info.notes || '').trim();
+  openSheet('<h3>有新版本 ' + esc(info.versionName || info.versionCode) + '</h3>' +
+    '<div class="desc">这次改了什么</div>' +
+    '<div class="hint" style="margin-top:10px;white-space:pre-wrap;font-size:13px;color:var(--dim)">' +
+      esc(notes || '没有写更新说明。') + '</div>' +
+    '<div class="actions"><button id="u-no">以后再说</button><button class="go" id="u-yes">下载并安装</button></div>', () => {
+    $('u-no').addEventListener('click', closeSheet);
+    $('u-yes').addEventListener('click', () => {
+      closeSheet();
+      n.installUpdate(new URL(info.url, location.href).toString());
+    });
+  });
+}
+async function quietCheckUpdate() {
+  const n = native();
+  if (!n) return;
+  try {
+    const r = await api('app/version');
+    const info = await r.json();
+    updateInfo = (info.available && info.versionCode > n.versionCode()) ? info : null;
+    if ($('p-me').classList.contains('on')) renderMe();
+    if (info.available && info.versionCode > n.versionCode()) {
+      toast('有新版本 v' + (info.versionName || info.versionCode) + '，在「我的」或「通知」里看', 4200);
+    }
+  } catch (_) {}
+}
+
+/* ---------- 启动 ---------- */
+// 同一条电脑对话被接管过两次（旧版本会这样）：只留当前选中的那条。
+async function cleanupDuplicateSessions() {
+  const seen = new Set();
+  const dupes = [];
+  const list = (state.sessions || []).slice().sort((a, b) => {
+    const aa = a.id === state.activeId ? 1 : 0;
+    const bb = b.id === state.activeId ? 1 : 0;
+    return (bb - aa) || ((b.updatedAt || 0) - (a.updatedAt || 0));
+  });
+  list.forEach((s) => {
+    if (!s.threadId) return;
+    if (seen.has(s.threadId)) { dupes.push(s.id); return; }
+    seen.add(s.threadId);
+  });
+  if (!dupes.length) return;
+  for (const id of dupes) await apiPost('session/delete', { id }).catch(() => {});
+  await refresh();
+}
+
+// 读一条对话的历史。失败给 null，调用方自己决定兜底成什么样。
+function readThread(tid) {
+  return api('threads/read?id=' + encodeURIComponent(tid))
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+}
+
+// 收下服务端给的整份状态。/api/state 和 /api/session/select 回的是一样的东西，
+// 两边共用这一段，免得只有 refresh 这条路会更新 runState。
+function applyState(st) {
+  if (!st) return;
+  pushLanUrls(st.lanUrls);
+  state = st;
+  runState = state.running || null;
+  runSig = runSigOf(runState);
+}
+
+async function refresh() {
+  const r = await api('state');
+  applyState(await r.json());
+  if (!state.active && state.sessions.length) {
+    const r2 = await apiPost('session/select', { id: state.sessions[0].id });
+    if (r2.ok) applyState(await r2.json());
+  }
+}
+async function boot() {
+  watchKeyboard();
+  openLive();
+  // 先用缓存把界面铺出来，再去拿最新的
+  const last = readLast();
+  threads = cachedThreads();
+  importedAt = cachedAt();
+  renderChats();
+  renderImport();
+  // 列表页是主屏：启动就把列表铺出来，不再自动钻回上次那条对话
+  setChatVisible(false);
+  attachPull($('chats-scroll'), $('ptr'), async () => {
+    await refresh();
+    await Promise.all([loadThreads(true), loadFeed(true)]);
+    renderChats();
+  });
+  $('feed-refresh').addEventListener('click', async () => {
+    await loadFeed(true);
+    toast('已刷新');
+  });
+  // 切后台/切网络时这几个请求会被系统掐断（日志里那些 ERR_CONNECTION_ABORTED），
+  // 属于正常现象，别让它变成未处理的报错
+  try { await refresh(); } catch (_) {}
+  try { await cleanupDuplicateSessions(); } catch (_) {}
+  renderChats();
+  loadThreads(false);
+  loadFeed(false);
+  syncNtfy();
+  // 电脑上正在生成时，列表和对话里都要能看见转圈圈
+  // 空闲时 4 秒问一次就够；自己这条对话在跑的时候提到 1 秒，
+  // 内容才会像"实时"一样往外冒（照 DusuWorks 那套校准节奏）。
+  (function schedulePoll() {
+    setTimeout(() => {
+      if (!document.hidden) pollStatus();
+      schedulePoll();
+    }, remoteRunning ? 1000 : 4000);
+  })();
+  pollStatus();
+  // 回到上次那一页；上次开着的对话直接从缓存里画出来，不用等网络
+  if (last.tab && last.tab !== 'chats') {
+    switchTab(last.tab);
+  } else {
+    ensureChatOpen();
+  }
+  setTimeout(renderChats, 300);
+  setTimeout(quietCheckUpdate, 1400);
+  // 对话列表整份 125 KB：以前每一分钟重拉一遍，现在三分钟一次，
+  // 而且只在看着列表页的时候拉；切回前台和下拉刷新都还会各自补一次。
+  setInterval(() => {
+    if (!document.hidden && !$('chat').classList.contains('on')) loadThreads(true);
+  }, 180000);
+}
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    // updateViaCache: 'none' 让浏览器每次都去问最新的 sw.js，
+    // 否则旧的外壳可能被缓存粘住（外壳缓存见 sw.js）
+    navigator.serviceWorker.register('sw.js?k=' + TOKEN, { updateViaCache: 'none' })
+      .then((reg) => reg.update().catch(() => {}))
+      .catch(() => {});
+  });
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadThreads(true); pollStatus(); if (outbox.length) flushOutbox(); pollShare(); } });
+// 系统层面网络恢复（飞行模式关掉、WiFi 重连）时立刻补发
+window.addEventListener('online', () => { if (outbox.length) flushOutbox(); });
+boot();
+</script>
+</body>
+</html>

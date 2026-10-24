@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 任务完成后用系统通知提醒 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 发送/拍板时的触感反馈 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!--
+      后台常驻那个服务用 specialUse，不用 dataSync。
+
+      Android 15 给 dataSync 加了"每 24 小时最多跑 6 小时"的硬上限：到点系统会
+      叫 onTimeout()，几秒内不收手就直接抛 ForegroundServiceDidNotStopInTimeException
+      把整个 App 弄崩（2026-10-07 的崩溃日志就是这个）。
+
+      这个服务要的是"一直连着自己那台电脑"，既不是同步数据也不是媒体处理，
+      属于系统列的那几类之外，所以用 specialUse 才对 —— 它没有时长上限。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 应用内更新：下载完新版本后要能拉起系统安装器 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 开机后把后台服务补起来，否则手机一重启就再也收不到通知和远程指令 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <application
+        android:allowBackup="false"
+        android:name=".App"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- 别的 App 里"分享"能选到随行：文字先进输入框，随手发给 Codex -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          扫码界面固定竖屏。
+          库默认给 CaptureActivity 设的是 fullSensor（跟着重力感应转），
+          手机上稍微歪一点画面就横过来，取景框也跟着转，很难对准。
+        -->
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:screenOrientation="portrait"
+            tools:replace="screenOrientation" />
+
+        <!-- 服务卡片用的内置浏览器 -->
+        <activity
+            android:name=".WebActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
+        <!-- 轮询电脑端通知缓存，把服务器通知变成手机通知 -->
+        <service
+            android:name=".NtfyService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <!-- specialUse 必须写清用途，系统会拿它做审计 -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keeps a live link to the user's own paired desktop so task notifications and remote commands keep arriving" />
+        </service>
+
+        <!--
+          开机自启。国内厂商（OPPO / vivo / 小米 / 华为）还会在系统层再拦一道
+          "自启动管理"，光有这个广播收不到 —— 那一步要用户手动加白名单，
+          入口在「我的」里。
+        -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

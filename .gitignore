@@ -1,0 +1,51 @@
+# ── 构建缓存 / 编译产物（可随时重新生成）──
+.gocache/
+*.exe
+*.old-*
+*.log
+
+# ── 安装包 ──
+*.apk
+
+# ── 安卓工程（详细规则见 android/app/.gitignore）──
+android/app/.gradle/
+android/app/build/
+android/app/app/build/
+android/app/local.properties
+android/app/keystore.properties
+android/app/keystore/
+android/app/app/libs/*.aar
+android/app/app/libs/*.jar
+
+# ── 个人运行数据 / 本地探针 / 发布包 ──
+token.txt
+tsnet/
+sessions.json
+二维码.png
+配对二维码.png
+安装包二维码.png
+入口.txt
+.trae/
+.workbuddy-ai/
+_probe/
+交接包/
+ui-preview/
+r420/
+print-*/
+output/
+*.zip
+dist/
+.test-data/
+codex-mobile/test-*.txt
+
+# ── 旧版本备份（含 Tailscale 节点状态、旧 exe）──
+_backup/
+
+# ── 探针跑出来的浏览器缓存 ──
+_probe/ui-check/chrome-profile*/
+
+# ── 编辑器 / 系统 ──
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store

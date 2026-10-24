@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标的底色：和 brand/make_icons.py 生成的位图同一套薄荷绿 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#82E3B8"
+        android:endColor="#45BE8B"
+        android:type="linear" />
+</shape>

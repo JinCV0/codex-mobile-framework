@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  允许明文：配对码给的是 https（Funnel 域名），但手动输入时也可能是
+  http://<机器名>.ts.net 这种 tailnet 内网地址，一并放行免得困惑。
+  这个 App 只会加载你自己电脑给出的地址。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>
